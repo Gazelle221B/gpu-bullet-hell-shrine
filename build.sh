@@ -33,18 +33,19 @@ node -e '
   }
   let content = fs.readFileSync(filePath, "utf8");
   
-  // Replace requestDevice wrapper to delete maxInterStageShaderComponents limit
+  // Replace requestDevice callsite to delete maxInterStageShaderComponents limit
   let patched = false;
-  content = content.replace(/__wbg_requestDevice_[a-f0-9]+:\s*function\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*\{/g, (match, adapter, desc) => {
+  content = content.replace(/const\s+ret\s*=\s*([\w]+)\.requestDevice\(([\w]+)\);/g, (match, adapter, desc) => {
     patched = true;
-    return `${match}\n            if (${desc} && ${desc}.requiredLimits) { delete ${desc}.requiredLimits.maxInterStageShaderComponents; }`;
+    return `if (${desc} && ${desc}.requiredLimits) { delete ${desc}.requiredLimits.maxInterStageShaderComponents; }\n            ${match}`;
   });
   
-  if (patched) {
+  // Build-time validation check to ensure the offending limit field deletion was actually injected
+  if (patched && content.includes("maxInterStageShaderComponents")) {
     fs.writeFileSync(filePath, content, "utf8");
     console.log("Successfully patched app.js dynamically!");
   } else {
-    console.error("Failed to patch app.js! requestDevice wrapper not found.");
+    console.error("Failed to patch app.js! requestDevice callsite not found or validation failed.");
     process.exit(1);
   }
 '
