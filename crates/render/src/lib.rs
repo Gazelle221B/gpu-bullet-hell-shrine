@@ -27,6 +27,10 @@ pub struct RenderContext {
     
     // Bind Groups
     pub render_bind_group: wgpu::BindGroup,
+    pub has_timestamp_query: bool,
+    pub last_frame_draw_calls: u32,
+    pub last_frame_upload_bytes: u32,
+    pub last_frame_render_ms: f32,
 }
 
 impl RenderContext {
@@ -327,7 +331,7 @@ impl RenderContext {
                     blend: Some(additive_blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PrimitiveState::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -381,6 +385,10 @@ impl RenderContext {
             particle_buf,
             uniform_buffer,
             render_bind_group,
+            has_timestamp_query: features.contains(wgpu::Features::TIMESTAMP_QUERY),
+            last_frame_draw_calls: 0,
+            last_frame_upload_bytes: 0,
+            last_frame_render_ms: 0.0,
         }
     }
 
@@ -394,7 +402,7 @@ impl RenderContext {
     }
 
     pub fn render_frame(&mut self, uniforms: &FrameUniforms) {
-        // Upload uniform data
+        let upload_bytes = std::mem::size_of::<FrameUniforms>() as u32;
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
 
         let output = self
@@ -411,6 +419,8 @@ impl RenderContext {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
+        let mut draw_calls: u32 = 0;
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -433,26 +443,29 @@ impl RenderContext {
                 occlusion_query_set: None,
             });
 
-            // 1. Draw Background
             render_pass.set_pipeline(&self.bg_pipeline);
             render_pass.set_bind_group(0, &self.render_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
+            draw_calls += 1;
 
-            // 2. Draw Particles (16384 instanced billboards)
             render_pass.set_pipeline(&self.particle_pipeline);
             render_pass.set_bind_group(0, &self.render_bind_group, &[]);
             render_pass.draw(0..6, 0..MAX_PARTICLES as u32);
+            draw_calls += 1;
 
-            // 3. Draw Player and Boss
             render_pass.set_pipeline(&self.entity_pipeline);
             render_pass.set_bind_group(0, &self.render_bind_group, &[]);
-            render_pass.draw(0..6, 0..2); // Instance 0 = Player, 1 = Boss
+            render_pass.draw(0..6, 0..2);
+            draw_calls += 1;
 
-            // 4. Draw Bullets (instanced rendering from direct storage buffer)
             render_pass.set_pipeline(&self.bullet_pipeline);
             render_pass.set_bind_group(0, &self.render_bind_group, &[]);
             render_pass.draw(0..6, 0..uniforms.bullet_count);
+            draw_calls += 1;
         }
+
+        self.last_frame_draw_calls = draw_calls;
+        self.last_frame_upload_bytes = upload_bytes;
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();

@@ -49,6 +49,14 @@ async function run() {
   const debugComputeTime = document.getElementById("debug-compute-time")!;
   const debugBullets = document.getElementById("debug-bullets")!;
   const debugParticles = document.getElementById("debug-particles")!;
+  const debugDrawCalls = document.getElementById("debug-draw-calls")!;
+  const debugMaxBucket = document.getElementById("debug-max-bucket")!;
+  const debugAvgBucket = document.getElementById("debug-avg-bucket")!;
+  const debugUpload = document.getElementById("debug-upload")!;
+  const debugMode = document.getElementById("debug-mode")!;
+
+  const finalSpellCountdown = document.getElementById("final-spell-countdown") as HTMLElement | null;
+  const finalSpellSec = document.getElementById("final-spell-sec") as HTMLElement | null;
 
   const gameOverlay = document.getElementById("game-overlay")!;
   const overlayTitle = document.getElementById("overlay-title")!;
@@ -59,28 +67,12 @@ async function run() {
     location.reload();
   });
 
-  // Patterns reference in Japanese matching GDD
-  const phasePatterns = [
-    "Phase 1: 星降りの円環 (Starry Rings)",
-    "Phase 2: 二重螺旋の霊札 (Double Helix)",
-    "Phase 3: 月蝕の格子雨 (Lunar Lattice Rain)",
-    "Phase 4: 蝶の迷路 (Maze of Butterflies)",
-    "Phase 5: 時計盤レーザー (Clockwork Lasers)",
-    "Phase 6: 星屑反転 (Stardust Inversion)",
-    "Final Spell: 天球演算「星守ノ夜」 (Celestial Stress Test)",
-  ];
-
   let frameCount = 0;
-  let lastTime = performance.now();
 
   function gameLoop(timestamp: number) {
-    const start = performance.now();
-
-    // Update and render in Rust / GPU
     game.update(timestamp);
     game.render();
 
-    const end = performance.now();
     frameCount++;
 
     // Throttle DOM updates to once every 3 frames for better performance
@@ -90,7 +82,6 @@ async function run() {
       scoreVal.innerText = score;
       grazeVal.innerText = game.get_graze().toString();
 
-      // Update Lives (hearts)
       const lives = game.get_lives();
       let heartsHtml = "";
       for (let i = 0; i < 3; i++) {
@@ -98,7 +89,6 @@ async function run() {
       }
       livesContainer.innerHTML = heartsHtml;
 
-      // Update Bombs
       const bombs = game.get_bombs();
       let bombsHtml = "";
       for (let i = 0; i < bombs; i++) {
@@ -106,26 +96,35 @@ async function run() {
       }
       bombsContainer.innerHTML = bombsHtml;
 
-      // Update Boss HP
       const hpPercent = game.get_boss_hp_percent() * 100;
       bossHpBar.style.width = `${Math.max(0, hpPercent)}%`;
 
-      const phaseIdx = Math.min(game.get_boss_phase(), 6);
-      bossPhaseName.innerText = phasePatterns[phaseIdx];
+      bossPhaseName.innerText = game.get_phase_display_name();
+
+      if (finalSpellCountdown && finalSpellSec) {
+        if (game.is_final_spell_active()) {
+          finalSpellCountdown.style.display = "";
+          finalSpellSec.innerText = game.get_final_spell_timer().toFixed(1);
+        } else {
+          finalSpellCountdown.style.display = "none";
+        }
+      }
 
       // 2. Update WebGPU Debug statistics
-      const fps = game.get_fps();
-      debugFps.innerText = fps.toFixed(1);
-      
-      const frameMs = end - start;
-      debugFrameTime.innerText = `${frameMs.toFixed(1)} ms`;
+      const counters = game.get_debug_counters_js() as any;
+      const prefix = counters.timing_is_approximate ? "~" : "";
 
-      // Real high-precision hardware timings directly from WebGPU passes!
-      debugRenderTime.innerText = `${game.get_gpu_render_ms().toFixed(3)} ms`;
-      debugComputeTime.innerText = `${game.get_gpu_compute_ms().toFixed(3)} ms`;
-
-      debugBullets.innerText = game.get_bullet_count().toLocaleString();
-      debugParticles.innerText = (game.get_bullet_count() > 0 ? "Active" : "Idle");
+      debugFps.innerText = counters.fps.toFixed(1);
+      debugFrameTime.innerText = `${counters.frame_ms.toFixed(1)} ms`;
+      debugRenderTime.innerText = `${prefix}${counters.render_ms.toFixed(3)} ms`;
+      debugComputeTime.innerText = `${prefix}${counters.compute_ms.toFixed(3)} ms`;
+      debugBullets.innerText = counters.active_bullets.toLocaleString();
+      debugParticles.innerText = counters.active_particles.toLocaleString();
+      debugDrawCalls.innerText = counters.draw_calls.toString();
+      debugMaxBucket.innerText = counters.grid_max_bucket.toString();
+      debugAvgBucket.innerText = counters.grid_avg_bucket.toFixed(1);
+      debugUpload.innerText = `${(counters.buffer_upload_bytes / 1024).toFixed(0)} KB/frame`;
+      debugMode.innerText = counters.timing_is_approximate ? "ArrayBuffer (~)" : "ArrayBuffer";
 
 
       // 3. Handle Game Over / Victory

@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 shared = { path = "../shared" }
 wgpu = "22.0.0"
+bytemuck = "1.16"
+futures-channel = "0.3"

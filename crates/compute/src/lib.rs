@@ -24,11 +24,17 @@ pub struct ComputeContext {
     pub collision_result_buf: wgpu::Buffer,
     pub collision_readback_buf: wgpu::Buffer,
 
-    // Bind Groups (using buffers shared from RenderContext)
+    pub grid_readback_buf: wgpu::Buffer,
     pub compute_bind_group: wgpu::BindGroup,
     pub spatial_bind_group: wgpu::BindGroup,
     pub collision_bind_group: wgpu::BindGroup,
     pub particle_bind_group: wgpu::BindGroup,
+    pub has_timestamp_query: bool,
+    pub last_frame_grid_max_bucket: u32,
+    pub last_frame_grid_avg_bucket: f32,
+    pub last_frame_compute_ms: f32,
+    pub last_frame_collision_hits: u32,
+    pub last_frame_collision_grazes: u32,
 }
 
 impl ComputeContext {
@@ -106,6 +112,13 @@ impl ComputeContext {
         let collision_readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Collision Readback Buffer"),
             size: std::mem::size_of::<CollisionResult>() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let grid_readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Grid Readback Buffer"),
+            size: (GRID_WIDTH * GRID_HEIGHT * 4) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -439,6 +452,17 @@ impl ComputeContext {
             push_constant_ranges: &[],
         });
 
+        let particle_update_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Particle Update Compute Pipeline"),
+            layout: Some(&particle_pipeline_layout),
+            module: &particle_shader,
+            entry_point: "main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let has_ts = device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+
         Self {
             device,
             queue,
@@ -456,10 +480,17 @@ impl ComputeContext {
             grid_tracker_buf,
             collision_result_buf,
             collision_readback_buf,
+            grid_readback_buf,
             compute_bind_group,
             spatial_bind_group,
             collision_bind_group,
             particle_bind_group,
+            has_timestamp_query: has_ts,
+            last_frame_grid_max_bucket: 0,
+            last_frame_grid_avg_bucket: 0.0,
+            last_frame_compute_ms: 0.0,
+            last_frame_collision_hits: 0,
+            last_frame_collision_grazes: 0,
         }
     }
 
@@ -588,7 +619,58 @@ impl ComputeContext {
             std::mem::size_of::<CollisionResult>() as u64,
         );
 
+        let total_cells = (GRID_WIDTH * GRID_HEIGHT * 4) as u64;
+        encoder.copy_buffer_to_buffer(
+            &self.grid_count_buf,
+            0,
+            &self.grid_readback_buf,
+            0,
+            total_cells,
+        );
+
         self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    pub fn sample_grid_stats(&mut self) {
+        let buffer_slice = self.grid_readback_buf.slice(..);
+
+        let (sender, mut receiver) = futures_channel::oneshot::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+
+        self.device.poll(wgpu::Maintain::Wait);
+
+        if let Ok(Some(Ok(()))) = receiver.try_recv() {
+            let data = buffer_slice.get_mapped_range();
+            let cells: &[u32] = bytemuck::cast_slice(&data);
+
+            let mut max_bucket: u32 = 0;
+            let mut sum: u64 = 0;
+            let mut occupied: u64 = 0;
+
+            for &count in cells {
+                if count > max_bucket {
+                    max_bucket = count;
+                }
+                if count > 0 {
+                    sum += count as u64;
+                    occupied += 1;
+                }
+            }
+
+            let avg = if occupied > 0 {
+                sum as f32 / occupied as f32
+            } else {
+                0.0
+            };
+
+            drop(data);
+            self.grid_readback_buf.unmap();
+
+            self.last_frame_grid_max_bucket = max_bucket;
+            self.last_frame_grid_avg_bucket = avg;
+        }
     }
 
     pub async fn readback_collisions(&self) -> Option<CollisionResult> {

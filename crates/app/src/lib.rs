@@ -1,9 +1,8 @@
 use wasm_bindgen::prelude::*;
-use std::sync::Arc;
 use game::GameState;
 use render::RenderContext;
 use compute::ComputeContext;
-use shared::{BulletInit, Particle, MAX_BULLETS, MAX_PARTICLES};
+use shared::{BulletInit, Particle, DebugCounters, MAX_BULLETS, MAX_PARTICLES};
 
 struct PlayerBullet {
     position: [f32; 2],
@@ -28,9 +27,12 @@ pub struct WasmGame {
     particle_write_idx: usize,
     player_bullets: Vec<PlayerBullet>,
     
-    // Performance counters (for true debug HUD overlay!)
     gpu_compute_ms: f32,
     gpu_render_ms: f32,
+    timing_is_approximate: u32,
+    debug_counters: DebugCounters,
+    active_particles: u32,
+    particles_spawned_this_frame: u32,
 }
 
 #[wasm_bindgen]
@@ -81,6 +83,16 @@ impl WasmGame {
             player_bullets: Vec::with_capacity(128),
             gpu_compute_ms: 0.1,
             gpu_render_ms: 0.5,
+            timing_is_approximate: 1,
+            debug_counters: DebugCounters {
+                fps: 60.0, frame_ms: 0.0, compute_ms: 0.1, render_ms: 0.5,
+                active_bullets: 0, active_particles: 0, draw_calls: 0,
+                buffer_upload_bytes: 0, grid_max_bucket: 0, grid_avg_bucket: 0.0,
+                collision_hits: 0, collision_grazes: 0,
+                timing_is_approximate: 1, _pad_counters: [0; 3],
+            },
+            active_particles: 0,
+            particles_spawned_this_frame: 0,
         })
     }
 
@@ -145,6 +157,7 @@ impl WasmGame {
         let dt = dt.min(0.05);
 
         self.ticks += 1;
+        self.particles_spawned_this_frame = 0;
 
         // Track FPS
         self.frame_count += 1;
@@ -446,6 +459,31 @@ impl WasmGame {
         }
         let compute_end = web_sys::window().unwrap().performance().unwrap().now();
         self.gpu_compute_ms = (compute_end - compute_start) as f32;
+
+        self.active_particles = self.particles_spawned_this_frame;
+        self.compute.sample_grid_stats();
+        let col = self.compute.read_collisions_sync();
+        if let Some(ref c) = col {
+            self.compute.last_frame_collision_hits = c.hit_count;
+            self.compute.last_frame_collision_grazes = c.graze_count;
+        }
+
+        self.debug_counters = DebugCounters {
+            fps: self.fps,
+            frame_ms: self.gpu_compute_ms + self.gpu_render_ms,
+            compute_ms: self.gpu_compute_ms,
+            render_ms: self.gpu_render_ms,
+            active_bullets: self.state.bullet_count,
+            active_particles: self.active_particles,
+            draw_calls: self.render.last_frame_draw_calls,
+            buffer_upload_bytes: self.render.last_frame_upload_bytes,
+            grid_max_bucket: self.compute.last_frame_grid_max_bucket,
+            grid_avg_bucket: self.compute.last_frame_grid_avg_bucket,
+            collision_hits: self.compute.last_frame_collision_hits,
+            collision_grazes: self.compute.last_frame_collision_grazes,
+            timing_is_approximate: self.timing_is_approximate,
+            _pad_counters: [0; 3],
+        };
     }
 
     #[wasm_bindgen]
@@ -493,6 +531,7 @@ impl WasmGame {
         let idx = self.particle_write_idx;
         self.render.queue.write_buffer(&self.render.particle_buf, (idx * std::mem::size_of::<Particle>()) as u64, bytemuck::bytes_of(&part));
         self.particle_write_idx = (self.particle_write_idx + 1) % MAX_PARTICLES;
+        self.particles_spawned_this_frame += 1;
     }
 
     // Expose DOM statistical bindings
@@ -536,4 +575,36 @@ impl WasmGame {
 
     #[wasm_bindgen]
     pub fn get_gpu_render_ms(&self) -> f32 { self.gpu_render_ms }
+
+    #[wasm_bindgen]
+    pub fn get_phase_display_name(&self) -> String {
+        self.state.get_phase_display_name()
+    }
+
+    #[wasm_bindgen]
+    pub fn get_final_spell_timer(&self) -> f32 {
+        self.state.get_final_spell_timer()
+    }
+
+    #[wasm_bindgen]
+    pub fn is_final_spell_active(&self) -> bool {
+        self.state.is_final_spell_active()
+    }
+
+    #[wasm_bindgen]
+    pub fn get_debug_counters_js(&self) -> JsValue {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("fps"), &JsValue::from_f64(self.debug_counters.fps as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("frame_ms"), &JsValue::from_f64(self.debug_counters.frame_ms as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("compute_ms"), &JsValue::from_f64(self.debug_counters.compute_ms as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("render_ms"), &JsValue::from_f64(self.debug_counters.render_ms as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("active_bullets"), &JsValue::from_f64(self.debug_counters.active_bullets as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("active_particles"), &JsValue::from_f64(self.debug_counters.active_particles as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("draw_calls"), &JsValue::from_f64(self.debug_counters.draw_calls as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("buffer_upload_bytes"), &JsValue::from_f64(self.debug_counters.buffer_upload_bytes as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("grid_max_bucket"), &JsValue::from_f64(self.debug_counters.grid_max_bucket as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("grid_avg_bucket"), &JsValue::from_f64(self.debug_counters.grid_avg_bucket as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("timing_is_approximate"), &JsValue::from_f64(self.debug_counters.timing_is_approximate as f64));
+        JsValue::from(obj)
+    }
 }

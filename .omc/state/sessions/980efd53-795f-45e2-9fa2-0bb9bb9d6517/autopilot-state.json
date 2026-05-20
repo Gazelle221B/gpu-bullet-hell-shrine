@@ -1,0 +1,10 @@
+{
+  "active": true,
+  "started_at": "2026-05-20T01:44:25.649Z",
+  "original_prompt": "/oh-my-claudecode:autopilot  mdファイルを全て読んで",
+  "session_id": "980efd53-795f-45e2-9fa2-0bb9bb9d6517",
+  "project_path": "/Users/kairyon/projects/gpu-bullet-hell-shrine",
+  "reinforcement_count": 0,
+  "awaiting_confirmation": true,
+  "last_checked_at": "2026-05-20T01:44:25.649Z"
+}

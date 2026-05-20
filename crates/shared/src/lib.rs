@@ -81,4 +81,6 @@ pub struct DebugCounters {
     pub grid_avg_bucket: f32,
     pub collision_hits: u32,
     pub collision_grazes: u32,
+    pub timing_is_approximate: u32, // 0 = real timestamp-query, 1 = CPU approximation
+    pub _pad_counters: [u32; 3],    // 16-byte boundary alignment
 }

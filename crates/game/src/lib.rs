@@ -1,4 +1,4 @@
-use shared::{BulletInit, FrameUniforms, CollisionResult};
+use shared::{FrameUniforms, CollisionResult};
 
 pub struct Player {
     pub position: [f32; 2],
@@ -44,16 +44,20 @@ pub struct Boss {
     pub max_hp: f32,
     pub current_phase: u32,
     pub phase_timer: f32,
+    pub phase_durations: [f32; 5],
+    pub final_spell_timer: f32,
 }
 
 impl Boss {
     pub fn new() -> Self {
         Self {
-            position: [640.0, 250.0], // Standard top-middle boss position
+            position: [640.0, 250.0],
             hp: 1000.0,
             max_hp: 1000.0,
             current_phase: 0,
             phase_timer: 0.0,
+            phase_durations: [20.0, 40.0, 45.0, 45.0, 30.0],
+            final_spell_timer: 0.0,
         }
     }
 
@@ -129,18 +133,28 @@ impl GameState {
         if self.player.position[1] < min_y + margin { self.player.position[1] = min_y + margin; }
         if self.player.position[1] > max_y - margin { self.player.position[1] = max_y - margin; }
 
-        // Core Phase management based on boss timer
-        let phase_limit = 45.0; // 45 seconds per phase
-        if self.boss.phase_timer >= phase_limit {
-            self.boss.phase_timer = 0.0;
-            self.boss.current_phase += 1;
-            self.active_pattern = (self.boss.current_phase % 6) + 1; // Loop patterns 1-6
-
-            if self.boss.current_phase >= 4 {
-                // Final Spell!
-                self.active_pattern = 7;
+        // Phase state machine (GDD §9.2)
+        if self.boss.current_phase < 4 {
+            if self.boss.phase_timer >= self.boss.phase_durations[self.boss.current_phase as usize] {
+                self.boss.phase_timer = 0.0;
+                self.boss.current_phase += 1;
+                if self.boss.current_phase == 4 {
+                    self.boss.final_spell_timer = 30.0;
+                }
             }
-            if self.boss.current_phase >= 5 {
+            // Set active_pattern based on (phase, half-point)
+            let half = self.boss.phase_durations[self.boss.current_phase as usize] * 0.5;
+            self.active_pattern = match self.boss.current_phase {
+                0 => 1,
+                1 => if self.boss.phase_timer >= half { 2 } else { 1 },
+                2 => if self.boss.phase_timer >= half { 4 } else { 3 },
+                3 => if self.boss.phase_timer >= half { 6 } else { 5 },
+                _ => 1,
+            };
+        } else if self.boss.current_phase == 4 {
+            self.boss.final_spell_timer -= dt;
+            self.active_pattern = 7;
+            if self.boss.final_spell_timer <= 0.0 {
                 self.is_victory = true;
             }
         }
@@ -185,7 +199,7 @@ impl GameState {
     pub fn fill_uniforms(&self, screen_w: f32, screen_h: f32) -> FrameUniforms {
         FrameUniforms {
             time: self.time,
-            delta_time: 0.0166, // Handled inside rendering passes
+            delta_time: 0.0166,
             phase_time: self.boss.phase_timer,
             bullet_count: self.bullet_count,
             player_position: self.player.position,
@@ -196,5 +210,27 @@ impl GameState {
             grid_dims: [shared::GRID_WIDTH, shared::GRID_HEIGHT],
             _padding: [0; 3],
         }
+    }
+
+    pub fn get_phase_display_name(&self) -> String {
+        match (self.boss.current_phase, self.active_pattern) {
+            (0, _) => "Tutorial: 結界調律".to_string(),
+            (1, 1) => "Phase 1-A: 星降りの円環".to_string(),
+            (1, 2) => "Phase 1-B: 二重螺旋の霊札".to_string(),
+            (2, 3) => "Phase 2-A: 月蝕の格子雨".to_string(),
+            (2, 4) => "Phase 2-B: 蝶の迷路".to_string(),
+            (3, 5) => "Phase 3-A: 時計盤レーザー".to_string(),
+            (3, 6) => "Phase 3-B: 星屑反転".to_string(),
+            (4, _) => "Final Spell: 天球演算「星守ノ夜」".to_string(),
+            _ => "—".to_string(),
+        }
+    }
+
+    pub fn get_final_spell_timer(&self) -> f32 {
+        self.boss.final_spell_timer
+    }
+
+    pub fn is_final_spell_active(&self) -> bool {
+        self.boss.current_phase == 4
     }
 }
