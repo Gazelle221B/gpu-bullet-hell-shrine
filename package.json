@@ -1,0 +1,18 @@
+{
+  "name": "gpu-bullet-hell-shrine",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "wasm:build": "CARGO_HOME=./.cargo_home PATH=\"/Users/kairyon/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" wasm-pack build crates/app --target web --out-dir ../../web/pkg --offline"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "vite-plugin-wasm": "^3.3.0"
+  }
+}

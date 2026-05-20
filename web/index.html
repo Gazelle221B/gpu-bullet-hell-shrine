@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>霊符演算録 〜 GPU Bullet Hell Shrine</title>
+  <meta name="description" content="Rust, WebAssembly, WebGPU, and WGSL Compute Shaders working in harmony to power a stunning bullet hell shooter vertical slice.">
+  
+  <!-- Premium Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Outfit:wght@300;400;600;800&family=Noto+Sans+JP:wght@300;400;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <div class="app-container">
+    <header class="main-header">
+      <div class="title-container">
+        <h1>霊符演算録</h1>
+        <span class="subtitle">~ GPU Bullet Hell Shrine ~</span>
+      </div>
+      <div class="badge">v0.2 Stable</div>
+    </header>
+
+    <div class="layout-grid">
+      <!-- Left sidebar: Game Status HUD -->
+      <aside class="sidebar-hud glass-panel">
+        <h2 class="panel-title">霊符結界状況 (HUD)</h2>
+        
+        <div class="stat-group">
+          <div class="stat-label">演算得点 (SCORE)</div>
+          <div class="stat-value" id="score-val">000,000,000</div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-label">残機 (LIVES)</div>
+          <div class="lives-container" id="lives-container">
+            <!-- Dynamic hearts will be injected here -->
+            <span class="heart active">★</span>
+            <span class="heart active">★</span>
+            <span class="heart active">★</span>
+          </div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-label">霊符ボム (BOMBS)</div>
+          <div class="bombs-container" id="bombs-container">
+            <span class="bomb-badge">星</span>
+            <span class="bomb-badge">星</span>
+          </div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-label">かすり (GRAZE)</div>
+          <div class="stat-value highlight-cyan" id="graze-val">0</div>
+        </div>
+
+        <div class="stat-group">
+          <div class="stat-label">結界侵食度 (BOSS HP)</div>
+          <div class="hp-bar-outer">
+            <div class="hp-bar-inner" id="boss-hp-bar" style="width: 100%"></div>
+          </div>
+          <div class="stat-meta" id="boss-phase-name">Phase 1: 星降りの円環</div>
+        </div>
+      </aside>
+
+      <!-- Center: Main Game Playfield -->
+      <main class="playfield-container glass-panel">
+        <canvas id="game-canvas" width="1280" height="960"></canvas>
+        
+        <!-- Game over overlay -->
+        <div id="game-overlay" class="overlay hidden">
+          <div class="overlay-content">
+            <h2 id="overlay-title">演算終了</h2>
+            <p id="overlay-msg">システム負荷オーバーフロー</p>
+            <button id="restart-btn" class="glow-btn">再起動 (RESTART)</button>
+          </div>
+        </div>
+      </main>
+
+      <!-- Right sidebar: WebGPU Engine Debug Overlay -->
+      <aside class="sidebar-debug glass-panel">
+        <h2 class="panel-title">GPU 演算統計 (DEBUG)</h2>
+
+        <div class="debug-metric">
+          <div class="debug-name">描画レート (FPS)</div>
+          <div class="debug-val highlight-green" id="debug-fps">120.0</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">フレーム時間 (Frame)</div>
+          <div class="debug-val" id="debug-frame-time">8.3 ms</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">GPU 描画時間 (Render)</div>
+          <div class="debug-val" id="debug-render-time">~2.1 ms</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">GPU 計算時間 (Compute)</div>
+          <div class="debug-val highlight-cyan" id="debug-compute-time">~0.6 ms</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="debug-metric">
+          <div class="debug-name">総アクティブ弾数 (Bullets)</div>
+          <div class="debug-val highlight-magenta" id="debug-bullets">10,240</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">アクティブ粒子数 (Particles)</div>
+          <div class="debug-val" id="debug-particles">4,096</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">ドローコール数 (Draw Calls)</div>
+          <div class="debug-val" id="debug-draw-calls">6</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="debug-metric">
+          <div class="debug-name">衝突判定グリッド (Grid)</div>
+          <div class="debug-val" id="debug-grid-dims">40x60 @ 32px</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">最大バケット占有 (Max bucket)</div>
+          <div class="debug-val" id="debug-max-bucket">18</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">平均バケット占有 (Avg bucket)</div>
+          <div class="debug-val" id="debug-avg-bucket">4.3</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="debug-metric">
+          <div class="debug-name">データ転送量 (Upload)</div>
+          <div class="debug-val" id="debug-upload">512 KB/frame</div>
+        </div>
+
+        <div class="debug-metric">
+          <div class="debug-name">スレッド同期 (Mode)</div>
+          <div class="debug-val highlight-orange" id="debug-mode">ArrayBuffer</div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Controls footer instructions -->
+    <footer class="controls-footer glass-panel">
+      <div class="control-item"><kbd>▲</kbd><kbd>▼</kbd><kbd>◀</kbd><kbd>▶</kbd> / <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>移動 (Move)</span></div>
+      <div class="control-item"><kbd>Shift</kbd><span>低速移動 + 判定表示 (Slow / Hitbox)</span></div>
+      <div class="control-item"><kbd>Z</kbd> / <kbd>J</kbd><span>星札ショット (Shot)</span></div>
+      <div class="control-item"><kbd>X</kbd> / <kbd>K</kbd><span>星封結界ボム (Bomb)</span></div>
+      <div class="control-item"><kbd>R</kbd><span>リセット (Reset)</span></div>
+    </footer>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
