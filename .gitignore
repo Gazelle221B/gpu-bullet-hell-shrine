@@ -37,3 +37,8 @@ pkg/
 .rustup/
 GDD.md
 
+# AI Agent Configuration
+CLAUDE.md
+AGENT.md
+AGENTS.md
+.agent/
