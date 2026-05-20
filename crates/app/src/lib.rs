@@ -604,7 +604,17 @@ impl WasmGame {
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("buffer_upload_bytes"), &JsValue::from_f64(self.debug_counters.buffer_upload_bytes as f64));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("grid_max_bucket"), &JsValue::from_f64(self.debug_counters.grid_max_bucket as f64));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("grid_avg_bucket"), &JsValue::from_f64(self.debug_counters.grid_avg_bucket as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("collision_hits"), &JsValue::from_f64(self.debug_counters.collision_hits as f64));
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("collision_grazes"), &JsValue::from_f64(self.debug_counters.collision_grazes as f64));
         let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("timing_is_approximate"), &JsValue::from_f64(self.debug_counters.timing_is_approximate as f64));
         JsValue::from(obj)
+    }
+
+    /// Returns true if the device + browser support wgpu::Features::TIMESTAMP_QUERY.
+    /// Currently informational only — Phase 7-b will wire real GPU timestamp readback.
+    /// Until then, `timing_is_approximate` remains 1 regardless of this capability.
+    #[wasm_bindgen]
+    pub fn is_timestamp_query_capable(&self) -> bool {
+        self.render.has_timestamp_query && self.compute.has_timestamp_query
     }
 }

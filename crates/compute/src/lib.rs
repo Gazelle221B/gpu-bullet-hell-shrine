@@ -35,6 +35,10 @@ pub struct ComputeContext {
     pub last_frame_compute_ms: f32,
     pub last_frame_collision_hits: u32,
     pub last_frame_collision_grazes: u32,
+
+    // Grid readback async state machine
+    grid_readback_pending: bool,
+    grid_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 impl ComputeContext {
@@ -491,6 +495,8 @@ impl ComputeContext {
             last_frame_compute_ms: 0.0,
             last_frame_collision_hits: 0,
             last_frame_collision_grazes: 0,
+            grid_readback_pending: false,
+            grid_readback_receiver: None,
         }
     }
 
@@ -619,29 +625,58 @@ impl ComputeContext {
             std::mem::size_of::<CollisionResult>() as u64,
         );
 
-        let total_cells = (GRID_WIDTH * GRID_HEIGHT * 4) as u64;
-        encoder.copy_buffer_to_buffer(
-            &self.grid_count_buf,
-            0,
-            &self.grid_readback_buf,
-            0,
-            total_cells,
-        );
+        // Skip grid_readback copy while a readback is in flight — otherwise
+        // copy_buffer_to_buffer into a mapped buffer triggers wgpu validation errors.
+        if !self.grid_readback_pending {
+            let total_cells = (GRID_WIDTH * GRID_HEIGHT * 4) as u64;
+            encoder.copy_buffer_to_buffer(
+                &self.grid_count_buf,
+                0,
+                &self.grid_readback_buf,
+                0,
+                total_cells,
+            );
+        }
 
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Non-blocking grid stats sampler. Uses a pending-state machine so the main
+    /// thread never blocks on GPU completion: if a previous readback is still in
+    /// flight, we just check (without waiting) whether it's ready. Stats values
+    /// remain at the last successful readback (1-2 frame staleness, fine for HUD).
     pub fn sample_grid_stats(&mut self) {
-        let buffer_slice = self.grid_readback_buf.slice(..);
+        // Advance the wgpu queue without blocking. This is what gives the
+        // GPU a chance to surface map_async callbacks.
+        self.device.poll(wgpu::Maintain::Poll);
 
-        let (sender, mut receiver) = futures_channel::oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
+        if !self.grid_readback_pending {
+            // No request in flight — issue a new map_async. The copy_buffer_to_buffer
+            // was already submitted at the end of execute_compute_pass for this frame.
+            let buffer_slice = self.grid_readback_buf.slice(..);
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+            self.grid_readback_pending = true;
+            self.grid_readback_receiver = Some(receiver);
+            return;
+        }
 
-        self.device.poll(wgpu::Maintain::Wait);
+        // A request is in flight — see if it has completed without blocking.
+        let received = if let Some(receiver) = self.grid_readback_receiver.as_mut() {
+            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+        } else {
+            false
+        };
 
-        if let Ok(Some(Ok(()))) = receiver.try_recv() {
+        if !received {
+            return;
+        }
+
+        // Buffer is now mapped — read, compute stats, unmap, clear pending state.
+        {
+            let buffer_slice = self.grid_readback_buf.slice(..);
             let data = buffer_slice.get_mapped_range();
             let cells: &[u32] = bytemuck::cast_slice(&data);
 
@@ -665,12 +700,13 @@ impl ComputeContext {
                 0.0
             };
 
-            drop(data);
-            self.grid_readback_buf.unmap();
-
             self.last_frame_grid_max_bucket = max_bucket;
             self.last_frame_grid_avg_bucket = avg;
+            // data is dropped at end of scope so unmap() below is safe.
         }
+        self.grid_readback_buf.unmap();
+        self.grid_readback_pending = false;
+        self.grid_readback_receiver = None;
     }
 
     pub async fn readback_collisions(&self) -> Option<CollisionResult> {
