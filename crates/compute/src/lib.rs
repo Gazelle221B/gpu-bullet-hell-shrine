@@ -39,6 +39,11 @@ pub struct ComputeContext {
     // Grid readback async state machine
     grid_readback_pending: bool,
     grid_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+
+    // Collision readback async state machine
+    collision_readback_pending: bool,
+    collision_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    pub last_collision_result: Option<CollisionResult>,
 }
 
 impl ComputeContext {
@@ -497,6 +502,9 @@ impl ComputeContext {
             last_frame_collision_grazes: 0,
             grid_readback_pending: false,
             grid_readback_receiver: None,
+            collision_readback_pending: false,
+            collision_readback_receiver: None,
+            last_collision_result: None,
         }
     }
 
@@ -617,13 +625,15 @@ impl ComputeContext {
         }
 
         // Copy collision results to CPU map-read buffer
-        encoder.copy_buffer_to_buffer(
-            &self.collision_result_buf,
-            0,
-            &self.collision_readback_buf,
-            0,
-            std::mem::size_of::<CollisionResult>() as u64,
-        );
+        if !self.collision_readback_pending {
+            encoder.copy_buffer_to_buffer(
+                &self.collision_result_buf,
+                0,
+                &self.collision_readback_buf,
+                0,
+                std::mem::size_of::<CollisionResult>() as u64,
+            );
+        }
 
         // Skip grid_readback copy while a readback is in flight — otherwise
         // copy_buffer_to_buffer into a mapped buffer triggers wgpu validation errors.
@@ -709,47 +719,45 @@ impl ComputeContext {
         self.grid_readback_receiver = None;
     }
 
-    pub async fn readback_collisions(&self) -> Option<CollisionResult> {
-        let buffer_slice = self.collision_readback_buf.slice(..);
-        
-        let (sender, receiver) = futures_channel::oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
+    pub fn sample_collisions(&mut self) {
+        self.device.poll(wgpu::Maintain::Poll);
 
-        // Wait for WebGPU to complete the mapping operation
-        self.device.poll(wgpu::Maintain::Wait);
+        if !self.collision_readback_pending {
+            let buffer_slice = self.collision_readback_buf.slice(..);
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+            self.collision_readback_pending = true;
+            self.collision_readback_receiver = Some(receiver);
+            return;
+        }
 
-        if let Ok(Ok(())) = receiver.await {
+        let received = if let Some(receiver) = self.collision_readback_receiver.as_mut() {
+            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+        } else {
+            false
+        };
+
+        if !received {
+            return;
+        }
+
+        {
+            let buffer_slice = self.collision_readback_buf.slice(..);
             let data = buffer_slice.get_mapped_range();
             let result: CollisionResult = *bytemuck::from_bytes(&data);
-            drop(data);
-            self.collision_readback_buf.unmap();
-            Some(result)
-        } else {
-            None
+            self.last_collision_result = Some(result);
+            self.last_frame_collision_hits = result.hit_count;
+            self.last_frame_collision_grazes = result.graze_count;
         }
+        self.collision_readback_buf.unmap();
+        self.collision_readback_pending = false;
+        self.collision_readback_receiver = None;
     }
 
-    pub fn read_collisions_sync(&self) -> Option<CollisionResult> {
-        let buffer_slice = self.collision_readback_buf.slice(..);
-        
-        let (sender, mut receiver) = futures_channel::oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-
-        self.device.poll(wgpu::Maintain::Wait);
-
-        if let Ok(Some(Ok(()))) = receiver.try_recv() {
-            let data = buffer_slice.get_mapped_range();
-            let result: CollisionResult = *bytemuck::from_bytes(&data);
-            drop(data);
-            self.collision_readback_buf.unmap();
-            Some(result)
-        } else {
-            None
-        }
+    pub fn take_collision_result(&mut self) -> Option<CollisionResult> {
+        self.last_collision_result.take()
     }
 }
 

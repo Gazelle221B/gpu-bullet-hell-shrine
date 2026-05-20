@@ -22,7 +22,7 @@ pub struct FrameUniforms {
     pub pattern_id: u32,
     pub grid_cell_size: f32,
     pub grid_dims: [u32; 2],
-    pub _padding: [u32; 3], // Align to 16 bytes (std140)
+    pub _padding: [u32; 2], // Align to 16 bytes (std140)
 }
 
 /// A CPU-side Bullet description used during generation/init

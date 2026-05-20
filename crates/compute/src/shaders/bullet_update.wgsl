@@ -9,6 +9,7 @@ struct FrameUniforms {
     pattern_id: u32,
     grid_cell_size: f32,
     grid_dims: vec2<u32>,
+    _padding: vec2<u32>,
 };
 
 struct BulletMeta {
@@ -43,20 +44,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    var meta = bullet_meta[index];
+    var b_meta = bullet_meta[index];
     
     // Check if active (bit 0 of packed_flags)
-    if ((meta.packed_flags & 1u) == 0u) {
+    if ((b_meta.packed_flags & 1u) == 0u) {
         return;
     }
 
     // Update age
     let dt = uniforms.delta_time;
-    meta.age += dt;
+    b_meta.age += dt;
 
-    if (meta.age >= meta.lifetime) {
-        meta.packed_flags &= ~1u; // Deactivate
-        bullet_meta[index] = meta;
+    if (b_meta.age >= b_meta.lifetime) {
+        b_meta.packed_flags &= ~1u; // Deactivate
+        bullet_meta[index] = b_meta;
         return;
     }
 
@@ -89,14 +90,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         accel.y = 80.0;
     } else if (pattern_id == 4u) {
         // Pattern 4: Butterflies - sinusoidal swaying
-        vel.x += sin(meta.age * 5.0 + f32(index)) * 40.0 * dt;
+        vel.x += sin(b_meta.age * 5.0 + f32(index)) * 40.0 * dt;
     } else if (pattern_id == 5u) {
         // Pattern 5: Lasers / Needles - speed up over time
         vel += normalize(vel + vec2<f32>(1e-5, 0.0)) * 60.0 * dt;
     } else if (pattern_id == 6u) {
         // Pattern 6: Stardust Inversion - stop and fly back towards player
-        let mid_life = meta.lifetime * 0.45;
-        if (meta.age > mid_life && meta.age < mid_life + dt * 1.5) {
+        let mid_life = b_meta.lifetime * 0.45;
+        if (b_meta.age > mid_life && b_meta.age < mid_life + dt * 1.5) {
             // Target the player
             let player_dir = normalize(uniforms.player_position - pos + vec2<f32>(rand(&seed) - 0.5, rand(&seed) - 0.5) * 20.0);
             vel = player_dir * 300.0;
@@ -120,12 +121,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let max_y = 910.0 + margin;
 
     if (pos.x < min_x || pos.x > max_x || pos.y < min_y || pos.y > max_y) {
-        meta.packed_flags &= ~1u; // Deactivate if offscreen
+        b_meta.packed_flags &= ~1u; // Deactivate if offscreen
     }
 
     // Write back SoA
     bullet_position[index] = pos;
     bullet_velocity[index] = vel;
-    bullet_meta[index] = meta;
+    bullet_meta[index] = b_meta;
     bullet_seed[index] = seed;
 }

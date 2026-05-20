@@ -9,6 +9,7 @@ struct FrameUniforms {
     pattern_id: u32,
     grid_cell_size: f32,
     grid_dims: vec2<u32>,
+    _padding: vec2<u32>,
 };
 
 struct BulletMeta {
@@ -39,8 +40,8 @@ struct Particle {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @flat typeinfo: u32,
-    @location(2) @flat radius: f32,
+    @location(1) @interpolate(flat) typeinfo: u32,
+    @location(2) @interpolate(flat) radius: f32,
     @location(3) color: vec4<f32>,
 };
 
@@ -59,18 +60,18 @@ fn vs_bullet(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    let meta = bullet_meta[instance_idx];
+    let b_meta = bullet_meta[instance_idx];
     let typeinfo = bullet_typeinfo[instance_idx];
     
     // Check active
-    if ((meta.packed_flags & 1u) == 0u) {
+    if ((b_meta.packed_flags & 1u) == 0u) {
         out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0); // Discard
         return out;
     }
 
     let b_pos = bullet_position[instance_idx];
     out.typeinfo = typeinfo;
-    out.radius = meta.radius;
+    out.radius = b_meta.radius;
 
     // Construct local quad coordinates based on vertex index (0 to 5 for standard triangle list)
     // Vertices: (-1, -1), (1, -1), (-1, 1), (-1, 1), (1, -1), (1, 1)
@@ -88,7 +89,7 @@ fn vs_bullet(
     out.uv = local_uv;
 
     // Offset is scaled by the bullet's visual bounds (giving extra padding for outer glow)
-    let visual_r = meta.radius * 2.5;
+    let visual_r = b_meta.radius * 2.5;
     let vertex_pos = b_pos + local_uv * visual_r;
 
     out.clip_position = vec4<f32>(project_pos(vertex_pos), 0.0, 1.0);

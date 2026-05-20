@@ -9,6 +9,7 @@ struct FrameUniforms {
     pattern_id: u32,
     grid_cell_size: f32,
     grid_dims: vec2<u32>,
+    _padding: vec2<u32>,
 };
 
 struct Particle {

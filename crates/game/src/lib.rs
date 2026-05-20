@@ -208,7 +208,7 @@ impl GameState {
             pattern_id: self.active_pattern,
             grid_cell_size: shared::GRID_CELL_SIZE,
             grid_dims: [shared::GRID_WIDTH, shared::GRID_HEIGHT],
-            _padding: [0; 3],
+            _padding: [0; 2],
         }
     }
 
