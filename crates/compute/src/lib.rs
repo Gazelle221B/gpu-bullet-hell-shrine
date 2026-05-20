@@ -675,7 +675,15 @@ impl ComputeContext {
 
         // A request is in flight — see if it has completed without blocking.
         let received = if let Some(receiver) = self.grid_readback_receiver.as_mut() {
-            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+            match receiver.try_recv() {
+                Ok(Some(Ok(()))) => true,
+                Ok(Some(Err(_))) | Err(_) => {
+                    self.grid_readback_pending = false;
+                    self.grid_readback_receiver = None;
+                    return;
+                }
+                Ok(None) => false,
+            }
         } else {
             false
         };
@@ -734,7 +742,15 @@ impl ComputeContext {
         }
 
         let received = if let Some(receiver) = self.collision_readback_receiver.as_mut() {
-            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+            match receiver.try_recv() {
+                Ok(Some(Ok(()))) => true,
+                Ok(Some(Err(_))) | Err(_) => {
+                    self.collision_readback_pending = false;
+                    self.collision_readback_receiver = None;
+                    return;
+                }
+                Ok(None) => false,
+            }
         } else {
             false
         };
