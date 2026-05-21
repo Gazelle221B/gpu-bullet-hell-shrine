@@ -44,7 +44,7 @@ pub struct ComputeContext {
     collision_write_idx: usize,
     collision_readback_pending: [bool; 2],
     collision_readback_receivers: [Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>; 2],
-    collision_results_queue: Vec<CollisionResult>,
+    collision_results_queue: std::collections::VecDeque<CollisionResult>,
 }
 
 impl ComputeContext {
@@ -513,7 +513,7 @@ impl ComputeContext {
             collision_write_idx: 0,
             collision_readback_pending: [false; 2],
             collision_readback_receivers: [None, None],
-            collision_results_queue: Vec::new(),
+            collision_results_queue: std::collections::VecDeque::new(),
         }
     }
 
@@ -761,7 +761,7 @@ impl ComputeContext {
                         let buffer_slice = self.collision_readback_bufs[i].slice(..);
                         let data = buffer_slice.get_mapped_range();
                         let result: CollisionResult = *bytemuck::from_bytes(&data);
-                        self.collision_results_queue.push(result);
+                        self.collision_results_queue.push_back(result);
                         self.last_frame_collision_hits = result.hit_count;
                         self.last_frame_collision_grazes = result.graze_count;
                     }
@@ -789,11 +789,7 @@ impl ComputeContext {
     }
 
     pub fn take_collision_result(&mut self) -> Option<CollisionResult> {
-        if !self.collision_results_queue.is_empty() {
-            Some(self.collision_results_queue.remove(0))
-        } else {
-            None
-        }
+        self.collision_results_queue.pop_front()
     }
 }
 
