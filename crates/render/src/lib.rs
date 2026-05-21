@@ -61,7 +61,10 @@ impl RenderContext {
                 &wgpu::DeviceDescriptor {
                     label: Some("GBHS Device"),
                     required_features: features,
-                    required_limits: adapter.limits(),
+                    required_limits: wgpu::Limits {
+                        max_storage_buffers_per_shader_stage: 10,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,

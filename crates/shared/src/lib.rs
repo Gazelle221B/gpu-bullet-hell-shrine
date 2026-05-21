@@ -25,6 +25,11 @@ pub struct FrameUniforms {
     pub _padding: [u32; 2], // Align to 16 bytes (std140)
 }
 
+// Compile-time layout guards for the uniform buffer mirror used by WGSL.
+// These fail the build if future edits change the expected packing/alignment.
+const _: [(); 64] = [(); core::mem::size_of::<FrameUniforms>()];
+const _: [(); 0] = [(); core::mem::size_of::<FrameUniforms>() % 16];
+
 /// A CPU-side Bullet description used during generation/init
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]

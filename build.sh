@@ -33,15 +33,21 @@ node -e '
   }
   let content = fs.readFileSync(filePath, "utf8");
   
-  // Replace requestDevice callsite to delete maxInterStageShaderComponents limit
+  const injection = "requiredLimits.maxInterStageShaderComponents;";
+  if (content.includes("delete") && content.includes(injection)) {
+    console.log("app.js is already patched, skipping.");
+    process.exit(0);
+  }
+  
+  // Replace requestDevice wrapper to delete maxInterStageShaderComponents limit
   let patched = false;
-  content = content.replace(/const\s+ret\s*=\s*([\w]+)\.requestDevice\(([\w]+)\);/g, (match, adapter, desc) => {
+  content = content.replace(/__wbg_requestDevice_[a-f0-9]+:\s*function\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*\{/g, (match, adapter, desc) => {
     patched = true;
-    return `if (${desc} && ${desc}.requiredLimits) { delete ${desc}.requiredLimits.maxInterStageShaderComponents; }\n            ${match}`;
+    return `${match}\n            if (${desc} && ${desc}.requiredLimits) { delete ${desc}.requiredLimits.maxInterStageShaderComponents; }`;
   });
   
-  // Build-time validation check to ensure the offending limit field deletion was actually injected
-  if (patched && content.includes("maxInterStageShaderComponents")) {
+  // Build-time validation check
+  if (patched && content.includes(injection)) {
     fs.writeFileSync(filePath, content, "utf8");
     console.log("Successfully patched app.js dynamically!");
   } else {

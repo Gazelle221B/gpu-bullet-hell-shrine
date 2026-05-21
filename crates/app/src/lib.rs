@@ -417,7 +417,7 @@ impl WasmGame {
         
         // 6. Handle Collision Result Readback non-blocking
         self.compute.sample_collisions();
-        if let Some(col_result) = self.compute.take_collision_result() {
+        while let Some(col_result) = self.compute.take_collision_result() {
             let hits = col_result.hit_count;
             let grazes = col_result.graze_count;
             

@@ -22,7 +22,6 @@ pub struct ComputeContext {
     pub grid_tracker_buf: wgpu::Buffer,
     
     pub collision_result_buf: wgpu::Buffer,
-    pub collision_readback_buf: wgpu::Buffer,
 
     pub grid_readback_buf: wgpu::Buffer,
     pub compute_bind_group: wgpu::BindGroup,
@@ -41,9 +40,11 @@ pub struct ComputeContext {
     grid_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 
     // Collision readback async state machine
-    collision_readback_pending: bool,
-    collision_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    pub last_collision_result: Option<CollisionResult>,
+    collision_readback_bufs: [wgpu::Buffer; 2],
+    collision_write_idx: usize,
+    collision_readback_pending: [bool; 2],
+    collision_readback_receivers: [Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>; 2],
+    collision_results_queue: Vec<CollisionResult>,
 }
 
 impl ComputeContext {
@@ -118,8 +119,15 @@ impl ComputeContext {
             mapped_at_creation: false,
         });
 
-        let collision_readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Collision Readback Buffer"),
+        let collision_readback_buf_a = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Collision Readback Buffer A"),
+            size: std::mem::size_of::<CollisionResult>() as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let collision_readback_buf_b = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Collision Readback Buffer B"),
             size: std::mem::size_of::<CollisionResult>() as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -488,7 +496,7 @@ impl ComputeContext {
             grid_items_buf,
             grid_tracker_buf,
             collision_result_buf,
-            collision_readback_buf,
+            collision_readback_bufs: [collision_readback_buf_a, collision_readback_buf_b],
             grid_readback_buf,
             compute_bind_group,
             spatial_bind_group,
@@ -502,9 +510,10 @@ impl ComputeContext {
             last_frame_collision_grazes: 0,
             grid_readback_pending: false,
             grid_readback_receiver: None,
-            collision_readback_pending: false,
-            collision_readback_receiver: None,
-            last_collision_result: None,
+            collision_write_idx: 0,
+            collision_readback_pending: [false; 2],
+            collision_readback_receivers: [None, None],
+            collision_results_queue: Vec::new(),
         }
     }
 
@@ -625,11 +634,11 @@ impl ComputeContext {
         }
 
         // Copy collision results to CPU map-read buffer
-        if !self.collision_readback_pending {
+        if !self.collision_readback_pending[self.collision_write_idx] {
             encoder.copy_buffer_to_buffer(
                 &self.collision_result_buf,
                 0,
-                &self.collision_readback_buf,
+                &self.collision_readback_bufs[self.collision_write_idx],
                 0,
                 std::mem::size_of::<CollisionResult>() as u64,
             );
@@ -730,50 +739,61 @@ impl ComputeContext {
     pub fn sample_collisions(&mut self) {
         self.device.poll(wgpu::Maintain::Poll);
 
-        if !self.collision_readback_pending {
-            let buffer_slice = self.collision_readback_buf.slice(..);
+        // 1. Check all pending buffers to see if any completed
+        for i in 0..2 {
+            if self.collision_readback_pending[i] {
+                let received = if let Some(receiver) = self.collision_readback_receivers[i].as_mut() {
+                    match receiver.try_recv() {
+                        Ok(Some(Ok(()))) => true,
+                        Ok(Some(Err(_))) | Err(_) => {
+                            self.collision_readback_pending[i] = false;
+                            self.collision_readback_receivers[i] = None;
+                            continue;
+                        }
+                        Ok(None) => false,
+                    }
+                } else {
+                    false
+                };
+
+                if received {
+                    {
+                        let buffer_slice = self.collision_readback_bufs[i].slice(..);
+                        let data = buffer_slice.get_mapped_range();
+                        let result: CollisionResult = *bytemuck::from_bytes(&data);
+                        self.collision_results_queue.push(result);
+                        self.last_frame_collision_hits = result.hit_count;
+                        self.last_frame_collision_grazes = result.graze_count;
+                    }
+                    self.collision_readback_bufs[i].unmap();
+                    self.collision_readback_pending[i] = false;
+                    self.collision_readback_receivers[i] = None;
+                }
+            }
+        }
+
+        // 2. Start mapping the current write buffer if it was copied to and not already pending
+        let write_idx = self.collision_write_idx;
+        if !self.collision_readback_pending[write_idx] {
+            let buffer_slice = self.collision_readback_bufs[write_idx].slice(..);
             let (sender, receiver) = futures_channel::oneshot::channel();
             buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
-            self.collision_readback_pending = true;
-            self.collision_readback_receiver = Some(receiver);
-            return;
-        }
+            self.collision_readback_pending[write_idx] = true;
+            self.collision_readback_receivers[write_idx] = Some(receiver);
 
-        let received = if let Some(receiver) = self.collision_readback_receiver.as_mut() {
-            match receiver.try_recv() {
-                Ok(Some(Ok(()))) => true,
-                Ok(Some(Err(_))) | Err(_) => {
-                    self.collision_readback_pending = false;
-                    self.collision_readback_receiver = None;
-                    return;
-                }
-                Ok(None) => false,
-            }
-        } else {
-            false
-        };
-
-        if !received {
-            return;
+            // Toggle write index for the next frame
+            self.collision_write_idx = (write_idx + 1) % 2;
         }
-
-        {
-            let buffer_slice = self.collision_readback_buf.slice(..);
-            let data = buffer_slice.get_mapped_range();
-            let result: CollisionResult = *bytemuck::from_bytes(&data);
-            self.last_collision_result = Some(result);
-            self.last_frame_collision_hits = result.hit_count;
-            self.last_frame_collision_grazes = result.graze_count;
-        }
-        self.collision_readback_buf.unmap();
-        self.collision_readback_pending = false;
-        self.collision_readback_receiver = None;
     }
 
     pub fn take_collision_result(&mut self) -> Option<CollisionResult> {
-        self.last_collision_result.take()
+        if !self.collision_results_queue.is_empty() {
+            Some(self.collision_results_queue.remove(0))
+        } else {
+            None
+        }
     }
 }
 
