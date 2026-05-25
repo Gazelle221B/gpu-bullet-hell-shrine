@@ -15,6 +15,29 @@ const SCROLL_PREVENT_CODES = new Set([
   "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Space",
 ]);
 
+// WebGPU compatibility: Monkey-patch GPUAdapter to remove the deprecated
+// maxInterStageShaderComponents limit that older wasm-bindgen/wgpu emits.
+// This ensures the application can boot regardless of the build method (e.g. Vite, npm run build).
+if (typeof navigator !== "undefined" && (navigator as any).gpu) {
+  const gpu = (navigator as any).gpu;
+  if (gpu.requestAdapter && !gpu.__patchedRequestAdapter) {
+    gpu.__patchedRequestAdapter = gpu.requestAdapter;
+    gpu.requestAdapter = async function (options: any) {
+      const adapter = await this.__patchedRequestAdapter(options);
+      if (adapter && adapter.requestDevice && !adapter.__patchedRequestDevice) {
+        adapter.__patchedRequestDevice = adapter.requestDevice;
+        adapter.requestDevice = function (descriptor: any) {
+          if (descriptor && descriptor.requiredLimits && "maxInterStageShaderComponents" in descriptor.requiredLimits) {
+            delete descriptor.requiredLimits.maxInterStageShaderComponents;
+          }
+          return this.__patchedRequestDevice(descriptor);
+        };
+      }
+      return adapter;
+    };
+  }
+}
+
 async function run() {
   console.log("Loading WASM module...");
   // Initialize wasm bundle

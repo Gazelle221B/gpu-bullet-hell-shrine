@@ -9,6 +9,7 @@ struct FrameUniforms {
     pattern_id: u32,
     grid_cell_size: f32,
     grid_dims: vec2<u32>,
+    _padding: vec2<u32>,
 };
 
 struct BulletMeta {
@@ -26,8 +27,8 @@ struct CollisionResult {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: FrameUniforms;
-@group(0) @binding(1) var<storage, read> bullet_position: array<vec2<f32>>;
-@group(0) @binding(2) var<storage, read> bullet_meta: array<BulletMeta>;
+@group(0) @binding(1) var<storage, read_write> bullet_position: array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read_write> bullet_meta: array<BulletMeta>;
 
 @group(1) @binding(0) var<storage, read> grid_count: array<u32>;
 @group(1) @binding(1) var<storage, read> grid_offset: array<u32>;

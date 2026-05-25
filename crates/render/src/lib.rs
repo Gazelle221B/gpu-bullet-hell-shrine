@@ -66,12 +66,20 @@ impl RenderContext {
             features.insert(wgpu::Features::TIMESTAMP_QUERY);
         }
 
+        let required_storage_buffers = 8;
+        if adapter.limits().max_storage_buffers_per_shader_stage < required_storage_buffers {
+            panic!("Device does not support {} storage buffers per shader stage (found: {}). This application requires at least {}.", required_storage_buffers, adapter.limits().max_storage_buffers_per_shader_stage, required_storage_buffers);
+        }
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("GBHS Device"),
                     required_features: features,
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        max_storage_buffers_per_shader_stage: required_storage_buffers,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,

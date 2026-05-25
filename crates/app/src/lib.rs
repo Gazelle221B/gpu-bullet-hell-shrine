@@ -196,7 +196,7 @@ impl WasmGame {
 
         // 2. Aim & Fire player shots (when holding Space or Z key)
         // Key 90 = Z, Key 32 = Space
-        if (self.keys[90] || self.keys[32]) && self.ticks.is_multiple_of(4) {
+        if (self.keys[90] || self.keys[32]) && self.ticks % 4 == 0 {
             let player_pos = self.state.player.position;
             self.player_bullets.push(PlayerBullet {
                 position: [player_pos[0] - 12.0, player_pos[1] - 15.0],
@@ -270,7 +270,8 @@ impl WasmGame {
         self.gpu_compute_ms = self.compute.last_frame_compute_ms;
         
         // 6. Handle Collision Result Readback non-blocking
-        if let Some(col_result) = self.compute.sample_collisions(web_sys::window().unwrap().performance().unwrap().now()) {
+        self.compute.sample_collisions(web_sys::window().unwrap().performance().unwrap().now());
+        while let Some(col_result) = self.compute.take_collision_result() {
             let hits = col_result.hit_count;
             let grazes = col_result.graze_count;
             

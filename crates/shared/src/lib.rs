@@ -22,8 +22,17 @@ pub struct FrameUniforms {
     pub pattern_id: u32,
     pub grid_cell_size: f32,
     pub grid_dims: [u32; 2],
-    pub _padding: [u32; 3], // Align to 16 bytes (std140)
+    pub _padding: [u32; 2], // Align to 16 bytes (std140)
 }
+
+// Compile-time layout guards for the uniform buffer mirror used by WGSL.
+// These fail the build if future edits change the expected packing/alignment.
+const _: [(); 64] = [(); core::mem::size_of::<FrameUniforms>()];
+const _: [(); 0] = [(); core::mem::size_of::<FrameUniforms>() % 16];
+const _: [(); 16] = [(); core::mem::offset_of!(FrameUniforms, player_position)];
+const _: [(); 24] = [(); core::mem::offset_of!(FrameUniforms, boss_position)];
+const _: [(); 32] = [(); core::mem::offset_of!(FrameUniforms, screen_size)];
+const _: [(); 48] = [(); core::mem::offset_of!(FrameUniforms, grid_dims)];
 
 /// A CPU-side Bullet description used during generation/init
 #[repr(C)]

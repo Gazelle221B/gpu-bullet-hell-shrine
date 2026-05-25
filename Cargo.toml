@@ -7,3 +7,6 @@ members = [
     "crates/compute",
     "crates/shared",
 ]
+
+[workspace.package]
+rust-version = "1.77"

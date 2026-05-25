@@ -220,7 +220,7 @@ impl GameState {
         let mut bullets = Vec::new();
 
         if pat_id == 1 {
-            if ticks.is_multiple_of(20) {
+            if ticks % 20 == 0 {
                 let count = 36;
                 for i in 0..count {
                     let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
@@ -240,7 +240,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 2 {
-            if ticks.is_multiple_of(3) {
+            if ticks % 3 == 0 {
                 let base_angle = (ticks as f32) * 0.12;
                 for i in 0..4 {
                     let angle = base_angle + (i as f32) * (std::f32::consts::PI / 2.0);
@@ -260,7 +260,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 3 {
-            if ticks.is_multiple_of(8) {
+            if ticks % 8 == 0 {
                 for i in 0..5 {
                     let rx = 340.0 + ((ticks * 71 + i * 29) % 600) as f32;
                     bullets.push(BulletInit {
@@ -279,7 +279,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 4 {
-            if ticks.is_multiple_of(7) {
+            if ticks % 7 == 0 {
                 let base_angle = (ticks as f32) * 0.09;
                 for i in 0..6 {
                     let angle = base_angle + (i as f32) * (2.0 * std::f32::consts::PI / 6.0);
@@ -299,7 +299,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 5 {
-            if ticks.is_multiple_of(14) {
+            if ticks % 14 == 0 {
                 let p_pos = self.player.position;
                 let target_angle = (p_pos[1] - boss_pos[1]).atan2(p_pos[0] - boss_pos[0]);
                 for i in 0..3 {
@@ -321,7 +321,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 6 {
-            if ticks.is_multiple_of(25) {
+            if ticks % 25 == 0 {
                 let count = 48;
                 for i in 0..count {
                     let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
@@ -341,7 +341,7 @@ impl GameState {
                 }
             }
         } else if pat_id == 7 {
-            if ticks.is_multiple_of(10) {
+            if ticks % 10 == 0 {
                 let count = 30;
                 for i in 0..count {
                     let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
@@ -360,7 +360,7 @@ impl GameState {
                     });
                 }
             }
-            if ticks.is_multiple_of(2) {
+            if ticks % 2 == 0 {
                 let angle = (ticks as f32) * 0.15;
                 bullets.push(BulletInit {
                     position: boss_pos,
@@ -393,7 +393,7 @@ impl GameState {
             pattern_id: self.active_pattern,
             grid_cell_size: shared::GRID_CELL_SIZE,
             grid_dims: [shared::GRID_WIDTH, shared::GRID_HEIGHT],
-            _padding: [0; 3],
+            _padding: [0; 2],
         }
     }
 
