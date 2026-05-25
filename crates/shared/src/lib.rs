@@ -29,6 +29,10 @@ pub struct FrameUniforms {
 // These fail the build if future edits change the expected packing/alignment.
 const _: [(); 64] = [(); core::mem::size_of::<FrameUniforms>()];
 const _: [(); 0] = [(); core::mem::size_of::<FrameUniforms>() % 16];
+const _: [(); 16] = [(); core::mem::offset_of!(FrameUniforms, player_position)];
+const _: [(); 24] = [(); core::mem::offset_of!(FrameUniforms, boss_position)];
+const _: [(); 32] = [(); core::mem::offset_of!(FrameUniforms, screen_size)];
+const _: [(); 48] = [(); core::mem::offset_of!(FrameUniforms, grid_dims)];
 
 /// A CPU-side Bullet description used during generation/init
 #[repr(C)]

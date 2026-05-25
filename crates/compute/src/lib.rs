@@ -25,6 +25,7 @@ pub struct ComputeContext {
 
     pub grid_readback_buf: wgpu::Buffer,
     pub compute_bind_group: wgpu::BindGroup,
+    pub spatial_compute_bind_group: wgpu::BindGroup,
     pub spatial_bind_group: wgpu::BindGroup,
     pub collision_bind_group: wgpu::BindGroup,
     pub particle_bind_group: wgpu::BindGroup,
@@ -263,6 +264,42 @@ impl ComputeContext {
             ],
         });
 
+        let spatial_compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Spatial Compute Base Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let collision_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Collision Broadphase Layout"),
             entries: &[
@@ -350,6 +387,16 @@ impl ComputeContext {
             ],
         });
 
+        let spatial_compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Spatial Compute Base Bind Group"),
+            layout: &spatial_compute_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: bullet_pos_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: bullet_meta_buf.as_entire_binding() },
+            ],
+        });
+
         let spatial_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Spatial Hash Bind Group"),
             layout: &spatial_layout,
@@ -399,7 +446,7 @@ impl ComputeContext {
 
         let spatial_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Spatial Hashing Pipeline Layout"),
-            bind_group_layouts: &[&compute_layout, &spatial_layout],
+            bind_group_layouts: &[&spatial_compute_layout, &spatial_layout],
             push_constant_ranges: &[],
         });
 
@@ -441,7 +488,7 @@ impl ComputeContext {
 
         let collision_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Collision Pipeline Layout"),
-            bind_group_layouts: &[&compute_layout, &collision_layout],
+            bind_group_layouts: &[&spatial_compute_layout, &collision_layout],
             push_constant_ranges: &[],
         });
 
@@ -499,6 +546,7 @@ impl ComputeContext {
             collision_readback_bufs: [collision_readback_buf_a, collision_readback_buf_b],
             grid_readback_buf,
             compute_bind_group,
+            spatial_compute_bind_group,
             spatial_bind_group,
             collision_bind_group,
             particle_bind_group,
@@ -561,7 +609,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.spatial_clear_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
                 let workgroups = (total_cells + 63) / 64;
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
@@ -574,7 +622,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.spatial_count_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
                 let workgroups = (bullet_count + 63) / 64;
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
@@ -587,7 +635,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.spatial_prefix_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
                 compute_pass.dispatch_workgroups(1, 1, 1);
             }
@@ -599,7 +647,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.spatial_sort_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
                 let workgroups = (bullet_count + 63) / 64;
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
@@ -615,7 +663,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.collision_clear_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.collision_bind_group, &[]);
                 compute_pass.dispatch_workgroups(1, 1, 1);
             }
@@ -627,7 +675,7 @@ impl ComputeContext {
                     timestamp_writes: None,
                 });
                 compute_pass.set_pipeline(&self.collision_detect_pipeline);
-                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.collision_bind_group, &[]);
                 compute_pass.dispatch_workgroups(1, 1, 1);
             }
