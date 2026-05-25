@@ -45,6 +45,8 @@ pub struct ComputeContext {
     collision_write_idx: usize,
     collision_readback_pending: [bool; 2],
     collision_readback_receivers: [Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>; 2],
+    collision_needs_clear: bool,
+    collision_has_data_to_map: bool,
     collision_results_queue: std::collections::VecDeque<CollisionResult>,
 }
 
@@ -281,7 +283,7 @@ impl ComputeContext {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -291,7 +293,7 @@ impl ComputeContext {
                     binding: 4,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -561,11 +563,13 @@ impl ComputeContext {
             collision_write_idx: 0,
             collision_readback_pending: [false; 2],
             collision_readback_receivers: [None, None],
+            collision_needs_clear: true,
+            collision_has_data_to_map: false,
             collision_results_queue: std::collections::VecDeque::new(),
         }
     }
 
-    pub fn execute_compute_pass(&self, bullet_count: u32) {
+    pub fn execute_compute_pass(&mut self, bullet_count: u32) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -656,8 +660,8 @@ impl ComputeContext {
 
         // 4. Collision Pass
         {
-            // Clear collision result counters
-            {
+            // Clear collision result counters only if we safely read back the previous frame's results
+            if self.collision_needs_clear {
                 let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Collision Clear Pass"),
                     timestamp_writes: None,
@@ -666,6 +670,7 @@ impl ComputeContext {
                 compute_pass.set_bind_group(0, &self.spatial_compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.collision_bind_group, &[]);
                 compute_pass.dispatch_workgroups(1, 1, 1);
+                self.collision_needs_clear = false;
             }
 
             // Detect player spatial hashing collisions
@@ -690,6 +695,8 @@ impl ComputeContext {
                 0,
                 std::mem::size_of::<CollisionResult>() as u64,
             );
+            self.collision_needs_clear = true;
+            self.collision_has_data_to_map = true;
         }
 
         // Skip grid_readback copy while a readback is in flight — otherwise
@@ -822,7 +829,7 @@ impl ComputeContext {
 
         // 2. Start mapping the current write buffer if it was copied to and not already pending
         let write_idx = self.collision_write_idx;
-        if !self.collision_readback_pending[write_idx] {
+        if self.collision_has_data_to_map && !self.collision_readback_pending[write_idx] {
             let buffer_slice = self.collision_readback_bufs[write_idx].slice(..);
             let (sender, receiver) = futures_channel::oneshot::channel();
             buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -830,6 +837,7 @@ impl ComputeContext {
             });
             self.collision_readback_pending[write_idx] = true;
             self.collision_readback_receivers[write_idx] = Some(receiver);
+            self.collision_has_data_to_map = false;
 
             // Toggle write index for the next frame
             self.collision_write_idx = (write_idx + 1) % 2;

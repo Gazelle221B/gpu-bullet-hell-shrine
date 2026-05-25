@@ -4,14 +4,21 @@ import init, { WasmGame } from "./pkg/app.js";
 // maxInterStageShaderComponents limit that older wasm-bindgen/wgpu emits.
 // This ensures the application can boot regardless of the build method (e.g. Vite, npm run build).
 if (typeof navigator !== "undefined" && (navigator as any).gpu) {
-  const OriginalGPUAdapter = (window as any).GPUAdapter;
-  if (OriginalGPUAdapter && OriginalGPUAdapter.prototype.requestDevice && !OriginalGPUAdapter.prototype.__patchedRequestDevice) {
-    OriginalGPUAdapter.prototype.__patchedRequestDevice = OriginalGPUAdapter.prototype.requestDevice;
-    OriginalGPUAdapter.prototype.requestDevice = function (descriptor: any) {
-      if (descriptor && descriptor.requiredLimits && "maxInterStageShaderComponents" in descriptor.requiredLimits) {
-        delete descriptor.requiredLimits.maxInterStageShaderComponents;
+  const gpu = (navigator as any).gpu;
+  if (gpu.requestAdapter && !gpu.__patchedRequestAdapter) {
+    gpu.__patchedRequestAdapter = gpu.requestAdapter;
+    gpu.requestAdapter = async function (options: any) {
+      const adapter = await this.__patchedRequestAdapter(options);
+      if (adapter && adapter.requestDevice && !adapter.__patchedRequestDevice) {
+        adapter.__patchedRequestDevice = adapter.requestDevice;
+        adapter.requestDevice = function (descriptor: any) {
+          if (descriptor && descriptor.requiredLimits && "maxInterStageShaderComponents" in descriptor.requiredLimits) {
+            delete descriptor.requiredLimits.maxInterStageShaderComponents;
+          }
+          return this.__patchedRequestDevice(descriptor);
+        };
       }
-      return this.__patchedRequestDevice(descriptor);
+      return adapter;
     };
   }
 }
