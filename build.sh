@@ -23,6 +23,4 @@ wasm-pack --version
 echo "Building wasm package offline..."
 wasm-pack build crates/app --target web --out-dir ../../web/pkg --offline
 
-
-
 echo "=== Build Succeeded! Wasm outputs are ready in web/pkg ==="
