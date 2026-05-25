@@ -415,8 +415,9 @@ impl WasmGame {
         let compute_start = web_sys::window().unwrap().performance().unwrap().now();
         self.compute.execute_compute_pass(self.state.bullet_count);
         
-        // 6. Handle Collision Result Readback synchronously
-        if let Some(col_result) = self.compute.read_collisions_sync() {
+        // 6. Handle Collision Result Readback non-blocking
+        self.compute.sample_collisions();
+        while let Some(col_result) = self.compute.take_collision_result() {
             let hits = col_result.hit_count;
             let grazes = col_result.graze_count;
             
@@ -462,11 +463,6 @@ impl WasmGame {
 
         self.active_particles = self.particles_spawned_this_frame;
         self.compute.sample_grid_stats();
-        let col = self.compute.read_collisions_sync();
-        if let Some(ref c) = col {
-            self.compute.last_frame_collision_hits = c.hit_count;
-            self.compute.last_frame_collision_grazes = c.graze_count;
-        }
 
         self.debug_counters = DebugCounters {
             fps: self.fps,

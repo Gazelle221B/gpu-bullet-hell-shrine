@@ -9,6 +9,7 @@ struct FrameUniforms {
     pattern_id: u32,
     grid_cell_size: f32,
     grid_dims: vec2<u32>,
+    _padding: vec2<u32>,
 };
 
 struct BulletMeta {
@@ -19,8 +20,8 @@ struct BulletMeta {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: FrameUniforms;
-@group(0) @binding(1) var<storage, read> bullet_position: array<vec2<f32>>;
-@group(0) @binding(2) var<storage, read> bullet_meta: array<BulletMeta>;
+@group(0) @binding(1) var<storage, read_write> bullet_position: array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read_write> bullet_meta: array<BulletMeta>;
 
 @group(1) @binding(0) var<storage, read_write> grid_count: array<atomic<u32>>;
 @group(1) @binding(1) var<storage, read_write> grid_offset: array<u32>;
@@ -55,8 +56,8 @@ fn count_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let meta = bullet_meta[index];
-    if ((meta.packed_flags & 1u) == 0u) {
+    let b_meta = bullet_meta[index];
+    if ((b_meta.packed_flags & 1u) == 0u) {
         return;
     }
 
@@ -85,8 +86,8 @@ fn sort_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let meta = bullet_meta[index];
-    if ((meta.packed_flags & 1u) == 0u) {
+    let b_meta = bullet_meta[index];
+    if ((b_meta.packed_flags & 1u) == 0u) {
         return;
     }
 
