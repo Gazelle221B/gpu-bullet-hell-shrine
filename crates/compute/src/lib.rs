@@ -695,9 +695,11 @@ impl ComputeContext {
                 0,
                 std::mem::size_of::<CollisionResult>() as u64,
             );
-            self.collision_needs_clear = true;
             self.collision_has_data_to_map = true;
         }
+        
+        // Copilot Review: Always clear next frame to prevent inflated counts if readback was skipped
+        self.collision_needs_clear = true;
 
         // Skip grid_readback copy while a readback is in flight — otherwise
         // copy_buffer_to_buffer into a mapped buffer triggers wgpu validation errors.
