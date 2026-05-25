@@ -1,5 +1,21 @@
 import init, { WasmGame } from "./pkg/app.js";
 
+// WebGPU compatibility: Monkey-patch GPUAdapter to remove the deprecated
+// maxInterStageShaderComponents limit that older wasm-bindgen/wgpu emits.
+// This ensures the application can boot regardless of the build method (e.g. Vite, npm run build).
+if (typeof navigator !== "undefined" && (navigator as any).gpu) {
+  const OriginalGPUAdapter = (window as any).GPUAdapter;
+  if (OriginalGPUAdapter && OriginalGPUAdapter.prototype.requestDevice && !OriginalGPUAdapter.prototype.__patchedRequestDevice) {
+    OriginalGPUAdapter.prototype.__patchedRequestDevice = OriginalGPUAdapter.prototype.requestDevice;
+    OriginalGPUAdapter.prototype.requestDevice = function (descriptor: any) {
+      if (descriptor && descriptor.requiredLimits && "maxInterStageShaderComponents" in descriptor.requiredLimits) {
+        delete descriptor.requiredLimits.maxInterStageShaderComponents;
+      }
+      return this.__patchedRequestDevice(descriptor);
+    };
+  }
+}
+
 async function run() {
   console.log("Loading WASM module...");
   // Initialize wasm bundle
