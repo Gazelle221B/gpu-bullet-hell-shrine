@@ -21,6 +21,7 @@ struct BulletMeta {
 @group(0) @binding(0) var<uniform> uniforms: FrameUniforms;
 @group(0) @binding(1) var<storage, read> bullet_position: array<vec2<f32>>;
 @group(0) @binding(2) var<storage, read> bullet_meta: array<BulletMeta>;
+@group(0) @binding(7) var<storage, read_write> active_bullet_count: atomic<u32>;
 
 @group(1) @binding(0) var<storage, read_write> grid_count: array<atomic<u32>>;
 @group(1) @binding(1) var<storage, read_write> grid_offset: array<u32>;
@@ -66,14 +67,74 @@ fn count_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
     atomicAdd(&grid_count[cell_idx], 1u);
 }
 
-// 3. Prefix Sum Pass (Single workgroup of 1 thread for fast prefix calculation)
-@compute @workgroup_size(1)
-fn prefix_sum() {
-    let total_cells = uniforms.grid_dims.x * uniforms.grid_dims.y;
-    var sum = 0u;
-    for (var i = 0u; i < total_cells; i = i + 1u) {
-        grid_offset[i] = sum;
-        sum += atomicLoad(&grid_count[i]);
+// 3. Prefix Sum Pass — Blelloch single-workgroup exclusive scan
+// Pads grid to next power-of-two (4096 for 40×60=2400 cells).
+// Workgroup memory: 4096 × 4 = 16 KB (within WebGPU-mandated minimum).
+
+const SCAN_N: u32 = 4096u;
+const SCAN_THREADS: u32 = 256u;
+const SCAN_PER_THREAD: u32 = SCAN_N / SCAN_THREADS;
+
+var<workgroup> scan_data: array<u32, SCAN_N>;
+
+@compute @workgroup_size(SCAN_THREADS)
+fn prefix_sum(@builtin(local_invocation_id) lid: vec3<u32>) {
+    let total = uniforms.grid_dims.x * uniforms.grid_dims.y;
+    let tid = lid.x;
+
+    // Load phase: read each atomic cell count into workgroup memory
+    for (var k: u32 = 0u; k < SCAN_PER_THREAD; k = k + 1u) {
+        let idx = tid * SCAN_PER_THREAD + k;
+        if (idx < total) {
+            scan_data[idx] = atomicLoad(&grid_count[idx]);
+        } else {
+            scan_data[idx] = 0u;
+        }
+    }
+    workgroupBarrier();
+
+    // Blelloch up-sweep (reduce phase)
+    var stride: u32 = 1u;
+    while (stride < SCAN_N) {
+        let span = stride * 2u;
+        for (var base: u32 = 0u; base < SCAN_N; base = base + SCAN_THREADS * span) {
+            let idx = base + (tid + 1u) * span - 1u;
+            if (idx < SCAN_N) {
+                scan_data[idx] = scan_data[idx] + scan_data[idx - stride];
+            }
+        }
+        workgroupBarrier();
+        stride = stride * 2u;
+    }
+
+    // Clear last element for exclusive scan
+    if (tid == 0u) {
+        scan_data[SCAN_N - 1u] = 0u;
+    }
+    workgroupBarrier();
+
+    // Blelloch down-sweep (distribution phase)
+    stride = SCAN_N / 2u;
+    while (stride > 0u) {
+        let span = stride * 2u;
+        for (var base: u32 = 0u; base < SCAN_N; base = base + SCAN_THREADS * span) {
+            let idx = base + (tid + 1u) * span - 1u;
+            if (idx < SCAN_N) {
+                let t = scan_data[idx - stride];
+                scan_data[idx - stride] = scan_data[idx];
+                scan_data[idx] = scan_data[idx] + t;
+            }
+        }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    // Store back exclusive scan results to grid_offset
+    for (var k: u32 = 0u; k < SCAN_PER_THREAD; k = k + 1u) {
+        let idx = tid * SCAN_PER_THREAD + k;
+        if (idx < total) {
+            grid_offset[idx] = scan_data[idx];
+        }
     }
 }
 

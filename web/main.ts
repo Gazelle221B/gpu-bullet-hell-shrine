@@ -1,5 +1,20 @@
 import init, { WasmGame } from "./pkg/app.js";
 
+function codeToLegacyKey(code: string): number {
+  const map: Record<string, number> = {
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+    KeyW: 87, KeyA: 65, KeyS: 83, KeyD: 68,
+    KeyZ: 90, KeyX: 88, KeyK: 75, KeyR: 82, KeyP: 80,
+    ShiftLeft: 16, ShiftRight: 16,
+    Space: 32,
+  };
+  return map[code] ?? 0;
+}
+
+const SCROLL_PREVENT_CODES = new Set([
+  "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Space",
+]);
+
 async function run() {
   console.log("Loading WASM module...");
   // Initialize wasm bundle
@@ -10,28 +25,27 @@ async function run() {
 
   // Track key events
   window.addEventListener("keydown", (e) => {
-    // Map keys to codes
-    let code = e.keyCode;
+    const code = codeToLegacyKey(e.code);
     game.handle_key_down(code);
 
     // Prevent default scrolling for arrows and space
-    if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) {
+    if (SCROLL_PREVENT_CODES.has(e.code)) {
       e.preventDefault();
     }
 
     // Trigger bomb (X or K)
-    if (e.key.toLowerCase() === "x" || e.key.toLowerCase() === "k") {
+    if (e.code === "KeyX" || e.code === "KeyK") {
       game.trigger_bomb();
     }
 
     // Restart key (R)
-    if (e.key.toLowerCase() === "r") {
+    if (e.code === "KeyR") {
       location.reload();
     }
   });
 
   window.addEventListener("keyup", (e) => {
-    let code = e.keyCode;
+    const code = codeToLegacyKey(e.code);
     game.handle_key_up(code);
   });
 

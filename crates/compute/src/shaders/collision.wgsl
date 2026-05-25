@@ -41,69 +41,60 @@ fn clear_collision() {
     atomicStore(&results.graze_count, 0u);
 }
 
-// 2. Compute Player Spatial Hash Collision
-@compute @workgroup_size(1)
-fn detect_collision() {
+// 2. Compute Player Spatial Hash Collision (9-thread workgroup: one thread per 3×3 cell)
+@compute @workgroup_size(9)
+fn detect_collision(@builtin(local_invocation_id) lid: vec3<u32>) {
     let player_pos = uniforms.player_position;
     
-    // Player hitbox radii
-    let player_hitbox_r = 3.0; // Extremely small core hitbox
-    let player_graze_r = 24.0;  // Generous graze circle
+    let player_hitbox_r = 3.0;
+    let player_graze_r = 24.0;
     
-    // Determine player's cell coordinates
     let player_cell_x = i32(player_pos.x / uniforms.grid_cell_size);
     let player_cell_y = i32(player_pos.y / uniforms.grid_cell_size);
     
     let grid_w = i32(uniforms.grid_dims.x);
     let grid_h = i32(uniforms.grid_dims.y);
 
-    // Scan 3x3 cell neighborhood around player
-    for (var dy = -1; dy <= 1; dy = dy + 1) {
-        for (var dx = -1; dx <= 1; dx = dx + 1) {
-            let cx = player_cell_x + dx;
-            let cy = player_cell_y + dy;
-            
-            // Check grid boundaries
-            if (cx < 0 || cx >= grid_w || cy < 0 || cy >= grid_h) {
-                continue;
+    let i = lid.x;
+    let dx = i32(i % 3u) - 1;
+    let dy = i32(i / 3u) - 1;
+    let cx = player_cell_x + dx;
+    let cy = player_cell_y + dy;
+
+    if (cx < 0 || cx >= grid_w || cy < 0 || cy >= grid_h) {
+        return;
+    }
+
+    let cell_idx = u32(cy * grid_w + cx);
+    let count = grid_count[cell_idx];
+    if (count == 0u) {
+        return;
+    }
+
+    let offset = grid_offset[cell_idx];
+
+    for (var i = 0u; i < count; i = i + 1u) {
+        let bullet_idx = grid_items[offset + i];
+        let b_pos = bullet_position[bullet_idx];
+        let b_meta = bullet_meta[bullet_idx];
+
+        if ((b_meta.packed_flags & 1u) == 0u) {
+            continue;
+        }
+
+        let dist = distance(player_pos, b_pos);
+        let col_dist = player_hitbox_r + b_meta.radius;
+        let graze_dist = player_graze_r + b_meta.radius;
+
+        if (dist < col_dist) {
+            let slot = atomicAdd(&results.hit_count, 1u);
+            if (slot < 16u) {
+                results.hit_bullet_ids[slot] = bullet_idx;
             }
-            
-            let cell_idx = u32(cy * grid_w + cx);
-            let count = grid_count[cell_idx];
-            if (count == 0u) {
-                continue;
-            }
-            
-            let offset = grid_offset[cell_idx];
-            
-            // Process all bullets in this cell
-            for (var i = 0u; i < count; i = i + 1u) {
-                let bullet_idx = grid_items[offset + i];
-                let b_pos = bullet_position[bullet_idx];
-                let b_meta = bullet_meta[bullet_idx];
-                
-                // Active check
-                if ((b_meta.packed_flags & 1u) == 0u) {
-                    continue;
-                }
-                
-                let dist = distance(player_pos, b_pos);
-                let col_dist = player_hitbox_r + b_meta.radius;
-                let graze_dist = player_graze_r + b_meta.radius;
-                
-                if (dist < col_dist) {
-                    // Hit! Write atomically to results
-                    let slot = atomicAdd(&results.hit_count, 1u);
-                    if (slot < 16u) {
-                        results.hit_bullet_ids[slot] = bullet_idx;
-                    }
-                } else if (dist < graze_dist) {
-                    // Graze! Write atomically to results
-                    let slot = atomicAdd(&results.graze_count, 1u);
-                    if (slot < 64u) {
-                        results.graze_bullet_ids[slot] = bullet_idx;
-                    }
-                }
+        } else if (dist < graze_dist) {
+            let slot = atomicAdd(&results.graze_count, 1u);
+            if (slot < 64u) {
+                results.graze_bullet_ids[slot] = bullet_idx;
             }
         }
     }

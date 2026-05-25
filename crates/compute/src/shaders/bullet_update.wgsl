@@ -25,6 +25,7 @@ struct BulletMeta {
 @group(0) @binding(4) var<storage, read_write> bullet_meta: array<BulletMeta>;
 @group(0) @binding(5) var<storage, read_write> bullet_typeinfo: array<u32>;
 @group(0) @binding(6) var<storage, read_write> bullet_seed: array<u32>;
+@group(0) @binding(7) var<storage, read_write> active_bullet_count: atomic<u32>;
 
 // PRNG from seed for pattern variations
 fn rand(seed: ptr<function, u32>) -> f32 {
@@ -34,6 +35,11 @@ fn rand(seed: ptr<function, u32>) -> f32 {
     *seed *= 0x27d4eb2du;
     *seed = *seed ^ (*seed >> 15u);
     return f32(*seed) / 4294967295.0;
+}
+
+@compute @workgroup_size(1)
+fn clear_active_count() {
+    atomicStore(&active_bullet_count, 0u);
 }
 
 @compute @workgroup_size(64)
@@ -112,15 +118,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     vel += accel * dt;
     pos += vel * dt;
 
-    // Check screen boundaries
+    // Check screen boundaries (derived from uniforms.screen_size)
+    // Playfield occupies middle 50% horizontally, full height minus 50px top/bottom.
+    // At 1280×960 these reduce to the previous hardcoded margins.
     let margin = 50.0;
-    let min_x = 320.0 - margin;
-    let max_x = 960.0 + margin;
+    let pf_w = uniforms.screen_size.x * 0.5;
+    let pf_cx = uniforms.screen_size.x * 0.5;
+    let min_x = pf_cx - pf_w * 0.5 - margin;
+    let max_x = pf_cx + pf_w * 0.5 + margin;
     let min_y = 50.0 - margin;
-    let max_y = 910.0 + margin;
+    let max_y = uniforms.screen_size.y - 50.0 + margin;
 
     if (pos.x < min_x || pos.x > max_x || pos.y < min_y || pos.y > max_y) {
         meta.packed_flags &= ~1u; // Deactivate if offscreen
+    }
+
+    if ((meta.packed_flags & 1u) != 0u) {
+        atomicAdd(&active_bullet_count, 1u);
     }
 
     // Write back SoA

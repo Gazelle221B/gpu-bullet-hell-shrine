@@ -1,4 +1,4 @@
-use shared::{FrameUniforms, CollisionResult};
+use shared::{FrameUniforms, CollisionResult, BulletInit};
 
 pub struct Player {
     pub position: [f32; 2],
@@ -38,6 +38,12 @@ impl Player {
     }
 }
 
+impl Default for Player {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Boss {
     pub position: [f32; 2],
     pub hp: f32,
@@ -69,6 +75,12 @@ impl Boss {
     }
 }
 
+impl Default for Boss {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct GameState {
     pub player: Player,
     pub boss: Boss,
@@ -77,6 +89,12 @@ pub struct GameState {
     pub is_victory: bool,
     pub active_pattern: u32,
     pub bullet_count: u32,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GameState {
@@ -103,8 +121,8 @@ impl GameState {
 
         // Manage keyboard movement inputs
         let speed = if shift { self.player.speed_slow } else { self.player.speed_normal };
-        let mut dx = 0.0;
-        let mut dy = 0.0;
+        let mut dx = 0.0_f32;
+        let mut dy = 0.0_f32;
 
         // WASD or Arrow Keys
         if keys[87] || keys[38] { dy -= 1.0; } // W / Up
@@ -113,7 +131,7 @@ impl GameState {
         if keys[68] || keys[39] { dx += 1.0; } // D / Right
 
         if dx != 0.0 && dy != 0.0 {
-            let length = (dx * dx + dy * dy as f32).sqrt();
+            let length = (dx * dx + dy * dy).sqrt();
             dx /= length;
             dy /= length;
         }
@@ -194,6 +212,173 @@ impl GameState {
                 self.is_game_over = true;
             }
         }
+    }
+
+    pub fn emit_pattern(&self, ticks: u32) -> Vec<BulletInit> {
+        let boss_pos = self.boss.position;
+        let pat_id = self.active_pattern;
+        let mut bullets = Vec::new();
+
+        if pat_id == 1 {
+            if ticks.is_multiple_of(20) {
+                let count = 36;
+                for i in 0..count {
+                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 190.0, angle.sin() * 190.0],
+                        acceleration: [0.0, 0.0],
+                        radius: 6.0,
+                        lifetime: 7.0,
+                        pattern_id: 1,
+                        bullet_type: 2,
+                        color_id: (ticks / 20) % 6,
+                        seed: i,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 2 {
+            if ticks.is_multiple_of(3) {
+                let base_angle = (ticks as f32) * 0.12;
+                for i in 0..4 {
+                    let angle = base_angle + (i as f32) * (std::f32::consts::PI / 2.0);
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 210.0, angle.sin() * 210.0],
+                        acceleration: [0.0, 0.0],
+                        radius: 5.0,
+                        lifetime: 6.5,
+                        pattern_id: 2,
+                        bullet_type: 1,
+                        color_id: 3,
+                        seed: i * ticks,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 3 {
+            if ticks.is_multiple_of(8) {
+                for i in 0..5 {
+                    let rx = 340.0 + ((ticks * 71 + i * 29) % 600) as f32;
+                    bullets.push(BulletInit {
+                        position: [rx, 80.0],
+                        velocity: [0.0, 110.0],
+                        acceleration: [0.0, 50.0],
+                        radius: 8.0,
+                        lifetime: 8.0,
+                        pattern_id: 3,
+                        bullet_type: 3,
+                        color_id: 4,
+                        seed: i * 13,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 4 {
+            if ticks.is_multiple_of(7) {
+                let base_angle = (ticks as f32) * 0.09;
+                for i in 0..6 {
+                    let angle = base_angle + (i as f32) * (2.0 * std::f32::consts::PI / 6.0);
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 160.0, angle.sin() * 160.0],
+                        acceleration: [0.0, 0.0],
+                        radius: 7.0,
+                        lifetime: 7.0,
+                        pattern_id: 4,
+                        bullet_type: 2,
+                        color_id: 1,
+                        seed: i * 23,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 5 {
+            if ticks.is_multiple_of(14) {
+                let p_pos = self.player.position;
+                let target_angle = (p_pos[1] - boss_pos[1]).atan2(p_pos[0] - boss_pos[0]);
+                for i in 0..3 {
+                    let angle_offset = (i as f32 - 1.0) * 0.1;
+                    let angle = target_angle + angle_offset;
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 320.0, angle.sin() * 320.0],
+                        acceleration: [0.0, 0.0],
+                        radius: 4.0,
+                        lifetime: 4.5,
+                        pattern_id: 5,
+                        bullet_type: 4,
+                        color_id: 5,
+                        seed: i + ticks,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 6 {
+            if ticks.is_multiple_of(25) {
+                let count = 48;
+                for i in 0..count {
+                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 300.0, angle.sin() * 300.0],
+                        acceleration: [-angle.cos() * 150.0, -angle.sin() * 150.0],
+                        radius: 5.5,
+                        lifetime: 7.5,
+                        pattern_id: 6,
+                        bullet_type: 1,
+                        color_id: 2,
+                        seed: i * 47,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+        } else if pat_id == 7 {
+            if ticks.is_multiple_of(10) {
+                let count = 30;
+                for i in 0..count {
+                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
+                    bullets.push(BulletInit {
+                        position: boss_pos,
+                        velocity: [angle.cos() * 180.0, angle.sin() * 180.0],
+                        acceleration: [0.0, 0.0],
+                        radius: 6.0,
+                        lifetime: 7.0,
+                        pattern_id: 7,
+                        bullet_type: 2,
+                        color_id: i % 6,
+                        seed: i,
+                        flags: 1,
+                        _padding: [0; 3],
+                    });
+                }
+            }
+            if ticks.is_multiple_of(2) {
+                let angle = (ticks as f32) * 0.15;
+                bullets.push(BulletInit {
+                    position: boss_pos,
+                    velocity: [angle.cos() * 240.0, angle.sin() * 240.0],
+                    acceleration: [0.0, 0.0],
+                    radius: 5.0,
+                    lifetime: 6.0,
+                    pattern_id: 7,
+                    bullet_type: 1,
+                    color_id: 3,
+                    seed: ticks,
+                    flags: 1,
+                    _padding: [0; 3],
+                });
+            }
+        }
+
+        bullets
     }
 
     pub fn fill_uniforms(&self, screen_w: f32, screen_h: f32) -> FrameUniforms {

@@ -7,6 +7,7 @@ pub struct ComputeContext {
     
     // Core Pipelines
     pub bullet_update_pipeline: wgpu::ComputePipeline,
+    pub clear_active_count_pipeline: wgpu::ComputePipeline,
     pub spatial_clear_pipeline: wgpu::ComputePipeline,
     pub spatial_count_pipeline: wgpu::ComputePipeline,
     pub spatial_prefix_pipeline: wgpu::ComputePipeline,
@@ -24,6 +25,10 @@ pub struct ComputeContext {
     pub collision_result_buf: wgpu::Buffer,
     pub collision_readback_buf: wgpu::Buffer,
 
+    pub active_bullet_count_buf: wgpu::Buffer,
+    pub active_bullet_count_readback_buf: wgpu::Buffer,
+    pub last_frame_active_bullets: u32,
+
     pub grid_readback_buf: wgpu::Buffer,
     pub compute_bind_group: wgpu::BindGroup,
     pub spatial_bind_group: wgpu::BindGroup,
@@ -39,9 +44,19 @@ pub struct ComputeContext {
     // Grid readback async state machine
     grid_readback_pending: bool,
     grid_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+
+    // Collision readback async state machine
+    collision_readback_pending: bool,
+    collision_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+
+    // Active bullet count async readback state machine
+    active_count_readback_pending: bool,
+    active_count_readback_receiver: Option<futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    collision_readback_start_time: f64,
 }
 
 impl ComputeContext {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -127,6 +142,20 @@ impl ComputeContext {
             mapped_at_creation: false,
         });
 
+        let active_bullet_count_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Active Bullet Count Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let active_bullet_count_readback_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Active Bullet Count Readback Buffer"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         // 2. Set Up Bind Group Layouts
         let compute_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Bullet Update Compute Layout"),
@@ -193,6 +222,16 @@ impl ComputeContext {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -334,6 +373,7 @@ impl ComputeContext {
                 wgpu::BindGroupEntry { binding: 4, resource: bullet_meta_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 5, resource: bullet_typeinfo_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: bullet_seed_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: active_bullet_count_buf.as_entire_binding() },
             ],
         });
 
@@ -373,6 +413,15 @@ impl ComputeContext {
             label: Some("Bullet Update Pipeline Layout"),
             bind_group_layouts: &[&compute_layout],
             push_constant_ranges: &[],
+        });
+
+        let clear_active_count_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Clear Active Count Compute Pipeline"),
+            layout: Some(&bullet_update_pipeline_layout),
+            module: &bullet_update_shader,
+            entry_point: "clear_active_count",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         let bullet_update_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -471,6 +520,7 @@ impl ComputeContext {
             device,
             queue,
             bullet_update_pipeline,
+            clear_active_count_pipeline,
             spatial_clear_pipeline,
             spatial_count_pipeline,
             spatial_prefix_pipeline,
@@ -484,6 +534,9 @@ impl ComputeContext {
             grid_tracker_buf,
             collision_result_buf,
             collision_readback_buf,
+            active_bullet_count_buf,
+            active_bullet_count_readback_buf,
+            last_frame_active_bullets: 0,
             grid_readback_buf,
             compute_bind_group,
             spatial_bind_group,
@@ -497,6 +550,11 @@ impl ComputeContext {
             last_frame_collision_grazes: 0,
             grid_readback_pending: false,
             grid_readback_receiver: None,
+            collision_readback_pending: false,
+            collision_readback_receiver: None,
+            active_count_readback_pending: false,
+            active_count_readback_receiver: None,
+            collision_readback_start_time: 0.0,
         }
     }
 
@@ -509,6 +567,16 @@ impl ComputeContext {
 
         // 1. Bullet Update Pass
         if bullet_count > 0 {
+            {
+                let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Clear Active Count Pass"),
+                    timestamp_writes: None,
+                });
+                compute_pass.set_pipeline(&self.clear_active_count_pipeline);
+                compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+                compute_pass.dispatch_workgroups(1, 1, 1);
+            }
+
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Bullet Update Pass"),
                 timestamp_writes: None,
@@ -516,7 +584,7 @@ impl ComputeContext {
 
             compute_pass.set_pipeline(&self.bullet_update_pipeline);
             compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
-            let workgroups = (bullet_count + 63) / 64;
+            let workgroups = bullet_count.div_ceil(64);
             compute_pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
@@ -529,13 +597,13 @@ impl ComputeContext {
 
             compute_pass.set_pipeline(&self.particle_update_pipeline);
             compute_pass.set_bind_group(0, &self.particle_bind_group, &[]);
-            let workgroups = (MAX_PARTICLES as u32 + 63) / 64;
+            let workgroups = (MAX_PARTICLES as u32).div_ceil(64);
             compute_pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
         // 3. Build Spatial Hash Grid
         if bullet_count > 0 {
-            let total_cells = (GRID_WIDTH * GRID_HEIGHT) as u32;
+            let total_cells = GRID_WIDTH * GRID_HEIGHT;
 
             // Clear Grid Cell Counts
             {
@@ -546,7 +614,7 @@ impl ComputeContext {
                 compute_pass.set_pipeline(&self.spatial_clear_pipeline);
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
-                let workgroups = (total_cells + 63) / 64;
+                let workgroups = total_cells.div_ceil(64);
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
             }
 
@@ -559,7 +627,7 @@ impl ComputeContext {
                 compute_pass.set_pipeline(&self.spatial_count_pipeline);
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
-                let workgroups = (bullet_count + 63) / 64;
+                let workgroups = bullet_count.div_ceil(64);
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
             }
 
@@ -584,7 +652,7 @@ impl ComputeContext {
                 compute_pass.set_pipeline(&self.spatial_sort_pipeline);
                 compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
                 compute_pass.set_bind_group(1, &self.spatial_bind_group, &[]);
-                let workgroups = (bullet_count + 63) / 64;
+                let workgroups = bullet_count.div_ceil(64);
                 compute_pass.dispatch_workgroups(workgroups, 1, 1);
             }
         }
@@ -616,14 +684,26 @@ impl ComputeContext {
             }
         }
 
-        // Copy collision results to CPU map-read buffer
-        encoder.copy_buffer_to_buffer(
-            &self.collision_result_buf,
-            0,
-            &self.collision_readback_buf,
-            0,
-            std::mem::size_of::<CollisionResult>() as u64,
-        );
+        // Copy collision results to CPU map-read buffer (skip if previous readback still in flight)
+        if !self.collision_readback_pending {
+            encoder.copy_buffer_to_buffer(
+                &self.collision_result_buf,
+                0,
+                &self.collision_readback_buf,
+                0,
+                std::mem::size_of::<shared::CollisionResult>() as u64,
+            );
+        }
+
+        if !self.active_count_readback_pending {
+            encoder.copy_buffer_to_buffer(
+                &self.active_bullet_count_buf,
+                0,
+                &self.active_bullet_count_readback_buf,
+                0,
+                4,
+            );
+        }
 
         // Skip grid_readback copy while a readback is in flight — otherwise
         // copy_buffer_to_buffer into a mapped buffer triggers wgpu validation errors.
@@ -709,47 +789,80 @@ impl ComputeContext {
         self.grid_readback_receiver = None;
     }
 
-    pub async fn readback_collisions(&self) -> Option<CollisionResult> {
-        let buffer_slice = self.collision_readback_buf.slice(..);
-        
-        let (sender, receiver) = futures_channel::oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
+    pub fn sample_active_count(&mut self) {
+        self.device.poll(wgpu::Maintain::Poll);
 
-        // Wait for WebGPU to complete the mapping operation
-        self.device.poll(wgpu::Maintain::Wait);
-
-        if let Ok(Ok(())) = receiver.await {
-            let data = buffer_slice.get_mapped_range();
-            let result: CollisionResult = *bytemuck::from_bytes(&data);
-            drop(data);
-            self.collision_readback_buf.unmap();
-            Some(result)
-        } else {
-            None
+        if !self.active_count_readback_pending {
+            let buffer_slice = self.active_bullet_count_readback_buf.slice(..);
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+            self.active_count_readback_pending = true;
+            self.active_count_readback_receiver = Some(receiver);
+            return;
         }
+
+        let received = if let Some(receiver) = self.active_count_readback_receiver.as_mut() {
+            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+        } else {
+            false
+        };
+
+        if !received {
+            return;
+        }
+
+        {
+            let buffer_slice = self.active_bullet_count_readback_buf.slice(..);
+            let data = buffer_slice.get_mapped_range();
+            self.last_frame_active_bullets = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
+        }
+        self.active_bullet_count_readback_buf.unmap();
+        self.active_count_readback_pending = false;
+        self.active_count_readback_receiver = None;
     }
 
-    pub fn read_collisions_sync(&self) -> Option<CollisionResult> {
-        let buffer_slice = self.collision_readback_buf.slice(..);
-        
-        let (sender, mut receiver) = futures_channel::oneshot::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
+    /// Non-blocking collision result sampler. Returns Some(result) when the GPU
+    /// has finished writing, None otherwise. Collision response is delayed 1-2
+    /// frames, which is imperceptible for 3px hitboxes at 120fps on a 1280×960 canvas.
+    pub fn sample_collisions(&mut self, now_ms: f64) -> Option<CollisionResult> {
+        self.device.poll(wgpu::Maintain::Poll);
 
-        self.device.poll(wgpu::Maintain::Wait);
-
-        if let Ok(Some(Ok(()))) = receiver.try_recv() {
-            let data = buffer_slice.get_mapped_range();
-            let result: CollisionResult = *bytemuck::from_bytes(&data);
-            drop(data);
-            self.collision_readback_buf.unmap();
-            Some(result)
-        } else {
-            None
+        if !self.collision_readback_pending {
+            let buffer_slice = self.collision_readback_buf.slice(..);
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+            self.collision_readback_pending = true;
+            self.collision_readback_receiver = Some(receiver);
+            self.collision_readback_start_time = now_ms;
+            return None;
         }
+
+        let received = if let Some(receiver) = self.collision_readback_receiver.as_mut() {
+            matches!(receiver.try_recv(), Ok(Some(Ok(()))))
+        } else {
+            false
+        };
+
+        if !received {
+            return None;
+        }
+
+        let result = {
+            let buffer_slice = self.collision_readback_buf.slice(..);
+            let data = buffer_slice.get_mapped_range();
+            *bytemuck::from_bytes(&data)
+        };
+        self.collision_readback_buf.unmap();
+        self.collision_readback_pending = false;
+        self.collision_readback_receiver = None;
+
+        self.last_frame_compute_ms = (now_ms - self.collision_readback_start_time) as f32;
+
+        Some(result)
     }
 }
 

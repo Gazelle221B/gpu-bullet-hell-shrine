@@ -7,7 +7,7 @@ This project leverages modern WebGPU compute shaders to simulate and render thou
 ## ✨ Features
 - **GPU-Driven Compute**: All bullet trajectories, spellcard logic, and spatial hashing are evaluated in parallel on the GPU using WGSL compute shaders.
 - **Zero-Copy Rendering**: Computed state is passed directly to the render pipeline without CPU bottlenecks via WebGPU storage buffers.
-- **7 Epic Spellcards**: Engaging Touhou-style boss attack patterns.
+- **6 Spellcard Patterns + 1 Final Spell**: Engaging Touhou-style boss attack patterns.
 - **Responsive Web UI**: A glassmorphic heads-up display built with modern HTML/CSS that tracks true hardware telemetry.
 
 ## 🚀 Running Locally
@@ -51,6 +51,9 @@ This project leverages modern WebGPU compute shaders to simulate and render thou
 - **crates/game**: CPU-side bounds checking, timer tracking, and state management.
 - **crates/shared**: Common standard data structures enforcing `std140` and `std430` layout compatibility between Rust and WGSL.
 - **web**: Frontend TypeScript logic and DOM overlays binding to the WebAssembly engine.
+
+## 📜 Attribution
+Inspired by classic Japanese danmaku shooters. Not affiliated with Team Shanghai Alice or the Touhou Project.
 
 ## 📜 License
 MIT License

@@ -1,5 +1,15 @@
+#![allow(clippy::arc_with_non_send_sync)]
+
 use shared::{FrameUniforms, MAX_BULLETS, MAX_PARTICLES, Particle};
 use std::sync::Arc;
+pub enum BulletBufferType {
+    Pos,
+    Vel,
+    Accel,
+    Meta,
+    TypeInfo,
+    Seed,
+}
 
 pub struct RenderContext {
     pub surface: wgpu::Surface<'static>,
@@ -389,6 +399,43 @@ impl RenderContext {
             last_frame_draw_calls: 0,
             last_frame_upload_bytes: 0,
             last_frame_render_ms: 0.0,
+        }
+    }
+
+    pub fn write_bullet_buffer(&self, buf_type: BulletBufferType, base_idx: usize, data: &[u8], stride: usize) {
+        let buf = match buf_type {
+            BulletBufferType::Pos => &self.bullet_pos_buf,
+            BulletBufferType::Vel => &self.bullet_vel_buf,
+            BulletBufferType::Accel => &self.bullet_accel_buf,
+            BulletBufferType::Meta => &self.bullet_meta_buf,
+            BulletBufferType::TypeInfo => &self.bullet_typeinfo_buf,
+            BulletBufferType::Seed => &self.bullet_seed_buf,
+        };
+        let n = data.len() / stride;
+        if n == 0 { return; }
+        let base = (base_idx * stride) as u64;
+        let end = base + data.len() as u64;
+        let cap = (shared::MAX_BULLETS * stride) as u64;
+        if end <= cap {
+            self.queue.write_buffer(buf, base, data);
+        } else {
+            let split = (cap - base) as usize;
+            self.queue.write_buffer(buf, base, &data[..split]);
+            self.queue.write_buffer(buf, 0, &data[split..]);
+        }
+    }
+
+    pub fn write_particle_buffer(&self, base_idx: usize, data: &[u8]) {
+        let stride = std::mem::size_of::<shared::Particle>();
+        let cap = (shared::MAX_PARTICLES * stride) as u64;
+        let base = (base_idx * stride) as u64;
+        let end = base + data.len() as u64;
+        if end <= cap {
+            self.queue.write_buffer(&self.particle_buf, base, data);
+        } else {
+            let split = (cap - base) as usize;
+            self.queue.write_buffer(&self.particle_buf, base, &data[..split]);
+            self.queue.write_buffer(&self.particle_buf, 0, &data[split..]);
         }
     }
 

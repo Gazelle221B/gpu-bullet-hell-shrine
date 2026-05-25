@@ -4,6 +4,8 @@ use render::RenderContext;
 use compute::ComputeContext;
 use shared::{BulletInit, Particle, DebugCounters, MAX_BULLETS, MAX_PARTICLES};
 
+const BULLET_META_SIZE: usize = 16; // radius(f32) + age(f32) + lifetime(f32) + packed_flags(u32)
+
 struct PlayerBullet {
     position: [f32; 2],
     active: bool,
@@ -33,6 +35,13 @@ pub struct WasmGame {
     debug_counters: DebugCounters,
     active_particles: u32,
     particles_spawned_this_frame: u32,
+    
+    pos_staging: Vec<u8>,
+    vel_staging: Vec<u8>,
+    accel_staging: Vec<u8>,
+    meta_staging: Vec<u8>,
+    typeinfo_staging: Vec<u8>,
+    seed_staging: Vec<u8>,
 }
 
 #[wasm_bindgen]
@@ -68,7 +77,11 @@ impl WasmGame {
         );
 
         Ok(WasmGame {
-            state: GameState::new(),
+            state: {
+                let mut s = GameState::new();
+                s.bullet_count = MAX_BULLETS as u32;
+                s
+            },
             render,
             compute,
             keys: [false; 256],
@@ -93,6 +106,12 @@ impl WasmGame {
             },
             active_particles: 0,
             particles_spawned_this_frame: 0,
+            pos_staging: Vec::new(),
+            vel_staging: Vec::new(),
+            accel_staging: Vec::new(),
+            meta_staging: Vec::new(),
+            typeinfo_staging: Vec::new(),
+            seed_staging: Vec::new(),
         })
     }
 
@@ -121,9 +140,9 @@ impl WasmGame {
         if self.state.trigger_bomb() {
             log::info!("Bomb Triggered: 星封結界 (Spell Seal Barrier)!");
             
-            // Instantly clear all active bullets
+            let zero_meta = vec![0u8; MAX_BULLETS * BULLET_META_SIZE];
+            self.render.queue.write_buffer(&self.render.bullet_meta_buf, 0, &zero_meta);
             self.bullet_write_idx = 0;
-            self.state.bullet_count = 0;
             
             // Spawn gorgeous circular violet bomb shockwave particles
             let player_pos = self.state.player.position;
@@ -177,7 +196,7 @@ impl WasmGame {
 
         // 2. Aim & Fire player shots (when holding Space or Z key)
         // Key 90 = Z, Key 32 = Space
-        if (self.keys[90] || self.keys[32]) && self.ticks % 4 == 0 {
+        if (self.keys[90] || self.keys[32]) && self.ticks.is_multiple_of(4) {
             let player_pos = self.state.player.position;
             self.player_bullets.push(PlayerBullet {
                 position: [player_pos[0] - 12.0, player_pos[1] - 15.0],
@@ -242,187 +261,21 @@ impl WasmGame {
             }
         }
 
-        // 4. Procedural Spellcard Spawns from Boss (Emitting Bullets)
-        let pat_id = self.state.active_pattern;
-        
-        if pat_id == 1 {
-            // Pattern 1: Star circular ring (Dream Seal)
-            if self.ticks % 20 == 0 {
-                let count = 36;
-                for i in 0..count {
-                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 190.0, angle.sin() * 190.0],
-                        acceleration: [0.0, 0.0],
-                        radius: 6.0,
-                        lifetime: 7.0,
-                        pattern_id: 1,
-                        bullet_type: 2, // Orb
-                        color_id: (self.ticks / 20) % 6,
-                        seed: i,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 2 {
-            // Pattern 2: Helix double spiral
-            if self.ticks % 3 == 0 {
-                let base_angle = (self.ticks as f32) * 0.12;
-                for i in 0..4 {
-                    let angle = base_angle + (i as f32) * (std::f32::consts::PI / 2.0);
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 210.0, angle.sin() * 210.0],
-                        acceleration: [0.0, 0.0],
-                        radius: 5.0,
-                        lifetime: 6.5,
-                        pattern_id: 2,
-                        bullet_type: 1, // Star
-                        color_id: 3, // Purple
-                        seed: i * self.ticks,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 3 {
-            // Pattern 3: Lunar Lattice Rain (Gravity deflected Talismans)
-            if self.ticks % 8 == 0 {
-                for i in 0..5 {
-                    let rx = 340.0 + ((self.ticks * 71 + i * 29) % 600) as f32;
-                    self.spawn_bullet(BulletInit {
-                        position: [rx, 80.0],
-                        velocity: [0.0, 110.0],
-                        acceleration: [0.0, 50.0], // Accelerates down
-                        radius: 8.0,
-                        lifetime: 8.0,
-                        pattern_id: 3,
-                        bullet_type: 3, // Talisman
-                        color_id: 4, // Green
-                        seed: i * 13,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 4 {
-            // Pattern 4: Spreading Butterflies
-            if self.ticks % 7 == 0 {
-                let base_angle = (self.ticks as f32) * 0.09;
-                for i in 0..6 {
-                    let angle = base_angle + (i as f32) * (2.0 * std::f32::consts::PI / 6.0);
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 160.0, angle.sin() * 160.0],
-                        acceleration: [0.0, 0.0],
-                        radius: 7.0,
-                        lifetime: 7.0,
-                        pattern_id: 4,
-                        bullet_type: 2, // Orb
-                        color_id: 1, // Magenta
-                        seed: i * 23,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 5 {
-            // Pattern 5: Needles targeting player position
-            if self.ticks % 14 == 0 {
-                let p_pos = self.state.player.position;
-                let target_angle = (p_pos[1] - boss_pos[1]).atan2(p_pos[0] - boss_pos[0]);
-                for i in 0..3 {
-                    let angle_offset = (i as f32 - 1.0) * 0.1;
-                    let angle = target_angle + angle_offset;
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 320.0, angle.sin() * 320.0],
-                        acceleration: [angle.cos() * 90.0, angle.sin() * 90.0],
-                        radius: 4.0,
-                        lifetime: 4.5,
-                        pattern_id: 5,
-                        bullet_type: 4, // Needle
-                        color_id: 5, // Orange
-                        seed: i + self.ticks,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 6 {
-            // Pattern 6: Stardust Inversion (Stops and tracks player)
-            if self.ticks % 25 == 0 {
-                let count = 48;
-                for i in 0..count {
-                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 300.0, angle.sin() * 300.0],
-                        acceleration: [-angle.cos() * 150.0, -angle.sin() * 150.0], // Slows down to stop
-                        radius: 5.5,
-                        lifetime: 7.5,
-                        pattern_id: 6,
-                        bullet_type: 1, // Star
-                        color_id: 2, // Gold
-                        seed: i * 47,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-        } else if pat_id == 7 {
-            // Pattern 7: Celestial Stress Test (Double all frequencies!)
-            if self.ticks % 10 == 0 {
-                let count = 30;
-                for i in 0..count {
-                    let angle = (i as f32) * (2.0 * std::f32::consts::PI / count as f32);
-                    self.spawn_bullet(BulletInit {
-                        position: boss_pos,
-                        velocity: [angle.cos() * 180.0, angle.sin() * 180.0],
-                        acceleration: [0.0, 0.0],
-                        radius: 6.0,
-                        lifetime: 7.0,
-                        pattern_id: 7,
-                        bullet_type: 2,
-                        color_id: i % 6,
-                        seed: i,
-                        flags: 1,
-                        _padding: [0; 3],
-                    });
-                }
-            }
-            if self.ticks % 2 == 0 {
-                let angle = (self.ticks as f32) * 0.15;
-                self.spawn_bullet(BulletInit {
-                    position: boss_pos,
-                    velocity: [angle.cos() * 240.0, angle.sin() * 240.0],
-                    acceleration: [0.0, 0.0],
-                    radius: 5.0,
-                    lifetime: 6.0,
-                    pattern_id: 7,
-                    bullet_type: 1,
-                    color_id: 3,
-                    seed: self.ticks,
-                    flags: 1,
-                    _padding: [0; 3],
-                });
-            }
-        }
+        // 4. Procedural Spellcard Spawns from Boss (Emitting Bullets) — batched
+        let new_bullets = self.state.emit_pattern(self.ticks);
+        self.flush_bullets(&new_bullets);
 
         // 5. Run WebGPU Compute Passes (Updating physics, spatial hash, and collisions)
-        let compute_start = web_sys::window().unwrap().performance().unwrap().now();
         self.compute.execute_compute_pass(self.state.bullet_count);
+        self.gpu_compute_ms = self.compute.last_frame_compute_ms;
         
-        // 6. Handle Collision Result Readback synchronously
-        if let Some(col_result) = self.compute.read_collisions_sync() {
+        // 6. Handle Collision Result Readback non-blocking
+        if let Some(col_result) = self.compute.sample_collisions(web_sys::window().unwrap().performance().unwrap().now()) {
             let hits = col_result.hit_count;
             let grazes = col_result.graze_count;
             
             self.state.handle_collision_results(&col_result);
 
-            // Handle death explosion on hits
             if hits > 0 && !self.state.player.is_invincible {
                 let player_pos = self.state.player.position;
                 for k in 0..80 {
@@ -431,7 +284,7 @@ impl WasmGame {
                     self.spawn_particle(Particle {
                         position: player_pos,
                         velocity: [angle.cos() * speed, angle.sin() * speed],
-                        color: [1.0, 0.1, 0.4, 1.0], // Cherry blossom pink death ring!
+                        color: [1.0, 0.1, 0.4, 1.0],
                         size: 7.0,
                         age: 0.0,
                         lifetime: 1.1,
@@ -440,7 +293,6 @@ impl WasmGame {
                 }
             }
 
-            // Grazing white sparkle bursts
             if grazes > 0 {
                 let player_pos = self.state.player.position;
                 for k in 0..grazes.min(8) {
@@ -456,24 +308,21 @@ impl WasmGame {
                     });
                 }
             }
+
+            self.compute.last_frame_collision_hits = hits;
+            self.compute.last_frame_collision_grazes = grazes;
         }
-        let compute_end = web_sys::window().unwrap().performance().unwrap().now();
-        self.gpu_compute_ms = (compute_end - compute_start) as f32;
 
         self.active_particles = self.particles_spawned_this_frame;
         self.compute.sample_grid_stats();
-        let col = self.compute.read_collisions_sync();
-        if let Some(ref c) = col {
-            self.compute.last_frame_collision_hits = c.hit_count;
-            self.compute.last_frame_collision_grazes = c.graze_count;
-        }
+        self.compute.sample_active_count();
 
         self.debug_counters = DebugCounters {
             fps: self.fps,
             frame_ms: self.gpu_compute_ms + self.gpu_render_ms,
             compute_ms: self.gpu_compute_ms,
             render_ms: self.gpu_render_ms,
-            active_bullets: self.state.bullet_count,
+            active_bullets: self.compute.last_frame_active_bullets,
             active_particles: self.active_particles,
             draw_calls: self.render.last_frame_draw_calls,
             buffer_upload_bytes: self.render.last_frame_upload_bytes,
@@ -503,7 +352,8 @@ impl WasmGame {
         self.gpu_render_ms = (render_end - render_start) as f32;
     }
 
-    // Dynamic bullet spawning helper
+    // Dynamic bullet spawning helper (single bullet, legacy path for backward compat)
+    #[allow(dead_code)]
     fn spawn_bullet(&mut self, init: BulletInit) {
         let idx = self.bullet_write_idx;
         
@@ -511,25 +361,61 @@ impl WasmGame {
         meta_bytes[0..4].copy_from_slice(&init.radius.to_ne_bytes());
         meta_bytes[4..8].copy_from_slice(&0.0f32.to_ne_bytes()); // age = 0.0
         meta_bytes[8..12].copy_from_slice(&init.lifetime.to_ne_bytes());
-        meta_bytes[12..16].copy_from_slice(&(init.flags | 1u32).to_ne_bytes()); // set active bit
+        meta_bytes[12..16].copy_from_slice(&(init.flags | 1u32).to_ne_bytes());
 
-        self.render.queue.write_buffer(&self.render.bullet_pos_buf, (idx * 8) as u64, bytemuck::bytes_of(&init.position));
-        self.render.queue.write_buffer(&self.render.bullet_vel_buf, (idx * 8) as u64, bytemuck::bytes_of(&init.velocity));
-        self.render.queue.write_buffer(&self.render.bullet_accel_buf, (idx * 8) as u64, bytemuck::bytes_of(&init.acceleration));
-        self.render.queue.write_buffer(&self.render.bullet_meta_buf, (idx * 16) as u64, &meta_bytes);
+        self.render.write_bullet_buffer(render::BulletBufferType::Pos, idx, bytemuck::bytes_of(&init.position), 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Vel, idx, bytemuck::bytes_of(&init.velocity), 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Accel, idx, bytemuck::bytes_of(&init.acceleration), 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Meta, idx, &meta_bytes, 16);
         
         let typeinfo = init.bullet_type | (init.pattern_id << 8) | (init.color_id << 16) | (init.flags << 24);
-        self.render.queue.write_buffer(&self.render.bullet_typeinfo_buf, (idx * 4) as u64, bytemuck::bytes_of(&typeinfo));
-        self.render.queue.write_buffer(&self.render.bullet_seed_buf, (idx * 4) as u64, bytemuck::bytes_of(&init.seed));
+        self.render.write_bullet_buffer(render::BulletBufferType::TypeInfo, idx, bytemuck::bytes_of(&typeinfo), 4);
+        self.render.write_bullet_buffer(render::BulletBufferType::Seed, idx, bytemuck::bytes_of(&init.seed), 4);
 
         self.bullet_write_idx = (self.bullet_write_idx + 1) % MAX_BULLETS;
-        self.state.bullet_count = self.state.bullet_count.max((idx + 1) as u32);
+    }
+
+    fn flush_bullets(&mut self, inits: &[BulletInit]) {
+        let n = inits.len();
+        if n == 0 { return; }
+
+        let idx = self.bullet_write_idx;
+
+        self.pos_staging.clear();
+        self.vel_staging.clear();
+        self.accel_staging.clear();
+        self.meta_staging.clear();
+        self.typeinfo_staging.clear();
+        self.seed_staging.clear();
+
+        for init in inits {
+            self.pos_staging.extend_from_slice(bytemuck::bytes_of(&init.position));
+            self.vel_staging.extend_from_slice(bytemuck::bytes_of(&init.velocity));
+            self.accel_staging.extend_from_slice(bytemuck::bytes_of(&init.acceleration));
+            let mut meta = [0u8; 16];
+            meta[0..4].copy_from_slice(&init.radius.to_ne_bytes());
+            meta[8..12].copy_from_slice(&init.lifetime.to_ne_bytes());
+            meta[12..16].copy_from_slice(&(init.flags | 1u32).to_ne_bytes());
+            self.meta_staging.extend_from_slice(&meta);
+            let ti = init.bullet_type | (init.pattern_id << 8) | (init.color_id << 16) | (init.flags << 24);
+            self.typeinfo_staging.extend_from_slice(bytemuck::bytes_of(&ti));
+            self.seed_staging.extend_from_slice(bytemuck::bytes_of(&init.seed));
+        }
+
+        self.render.write_bullet_buffer(render::BulletBufferType::Pos, idx, &self.pos_staging, 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Vel, idx, &self.vel_staging, 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Accel, idx, &self.accel_staging, 8);
+        self.render.write_bullet_buffer(render::BulletBufferType::Meta, idx, &self.meta_staging, 16);
+        self.render.write_bullet_buffer(render::BulletBufferType::TypeInfo, idx, &self.typeinfo_staging, 4);
+        self.render.write_bullet_buffer(render::BulletBufferType::Seed, idx, &self.seed_staging, 4);
+
+        self.bullet_write_idx = (idx + n) % MAX_BULLETS;
     }
 
     // Dynamic particle spawning helper
     fn spawn_particle(&mut self, part: Particle) {
         let idx = self.particle_write_idx;
-        self.render.queue.write_buffer(&self.render.particle_buf, (idx * std::mem::size_of::<Particle>()) as u64, bytemuck::bytes_of(&part));
+        self.render.write_particle_buffer(idx, bytemuck::bytes_of(&part));
         self.particle_write_idx = (self.particle_write_idx + 1) % MAX_PARTICLES;
         self.particles_spawned_this_frame += 1;
     }
